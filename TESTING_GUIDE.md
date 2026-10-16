@@ -5,7 +5,7 @@ This guide tests the existing React/Vite storefront and admin dashboard, Express
 ## 1. Project-specific facts and safety
 
 - Frontend: React and Vite, served at `http://127.0.0.1:5173`.
-- Backend: Express, normally served at `http://localhost:5000`.
+- Backend: Express, normally served at `http://localhost:5503`.
 - Health endpoint: `GET /api/health`.
 - Menu endpoint: `GET /api/foods` (plural).
 - Order endpoints: `POST /api/orders`, `GET /api/orders`, `GET /api/orders/:id`, and `PATCH /api/orders/:id/status`.
@@ -53,7 +53,7 @@ This guide tests the existing React/Vite storefront and admin dashboard, Express
    if (-not (Test-Path 'server\.env')) { Copy-Item 'server\.env.example' 'server\.env' }
    ```
 
-   Configure `server\.env` locally with your MySQL host, port, account, password, and database (`foodieexpress`). A blank password is valid only if that MySQL account intentionally has no password. The root `.env` configures `VITE_API_BASE_URL`; the default is `http://localhost:5000/api`.
+   Configure `server\.env` locally with your MySQL host, port, account, password, and database (`foodieexpress`). A blank password is valid only if that MySQL account intentionally has no password. The root `.env` configures `VITE_API_BASE_URL`; the default is `http://localhost:5503/api`.
 
 5. Check that MySQL is running:
 
@@ -67,7 +67,7 @@ This guide tests the existing React/Vite storefront and admin dashboard, Express
 6. Check the application ports before starting anything:
 
    ```powershell
-   foreach ($port in @(5000, 5173)) {
+   foreach ($port in @(5503, 5173)) {
      $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
      if ($listener) {
        $listener | Select-Object LocalAddress, LocalPort, OwningProcess
@@ -165,7 +165,7 @@ npm run build
 3. In another terminal or browser, check health:
 
    ```powershell
-   Invoke-RestMethod 'http://localhost:5000/api/health'
+   Invoke-RestMethod 'http://localhost:5503/api/health'
    ```
 
    **Pass:** HTTP 200 with `status = ok`, `backend = running`, and `database.connected = true`.
@@ -174,7 +174,7 @@ npm run build
 
    ```powershell
    try {
-     Invoke-RestMethod 'http://localhost:5000/api/not-a-real-route'
+     Invoke-RestMethod 'http://localhost:5503/api/not-a-real-route'
      throw 'Unexpected success for unknown route.'
    } catch {
      if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
@@ -203,7 +203,7 @@ npm run build
 1. Fetch the menu:
 
    ```powershell
-   $foods = Invoke-RestMethod 'http://localhost:5000/api/foods'
+   $foods = Invoke-RestMethod 'http://localhost:5503/api/foods'
    $foods | Format-Table id, name, category, price, oldPrice
    ```
 
@@ -240,7 +240,7 @@ npm run build
 
 2. Open **http://127.0.0.1:5173/**. Use browser Developer Tools:
    - Console: no uncaught errors.
-   - Network: `GET http://localhost:5000/api/foods` returns HTTP 200.
+   - Network: `GET http://localhost:5503/api/foods` returns HTTP 200.
    - Elements/UI: menu dishes match the records served by `/api/foods`.
 
 3. Test menu loading states:
@@ -300,7 +300,7 @@ $body = @{
 } | ConvertTo-Json -Depth 5
 
 $created = Invoke-RestMethod `
-  -Uri 'http://localhost:5000/api/orders' `
+  -Uri 'http://localhost:5503/api/orders' `
   -Method Post `
   -ContentType 'application/json' `
   -Body $body
@@ -315,7 +315,7 @@ $created
 
    ```powershell
    $orderId = $created.orderId
-   Invoke-RestMethod "http://localhost:5000/api/orders/$orderId"
+   Invoke-RestMethod "http://localhost:5503/api/orders/$orderId"
    ```
 
    **Pass:** the `order` and `items` match the test customer, selected dish, quantity, prices, discounts, and total.
@@ -334,7 +334,7 @@ $created
 3. List orders:
 
    ```powershell
-   Invoke-RestMethod 'http://localhost:5000/api/orders'
+   Invoke-RestMethod 'http://localhost:5503/api/orders'
    ```
 
    **Pass:** the newly created order appears in the returned array.
@@ -422,6 +422,6 @@ Before finishing, record the result of every applicable item:
 - [ ] A test order is created, retrieved, verified in MySQL, and either deliberately retained or narrowly cleaned up.
 - [ ] Admin menu CRUD and test-order status changes work without altering existing records.
 - [ ] Browser Console has no uncaught errors; Network responses have the expected statuses.
-- [ ] No unexpected processes or test servers remain on ports 5000, 5173, or any temporary test port.
+- [ ] No unexpected processes or test servers remain on ports 5503, 5173, or any temporary test port.
 
 Stop foreground backend/frontend terminals with Ctrl+C. Recheck ports before launching again; do not terminate a process unless you have identified that it is the test server you started.

@@ -24,8 +24,58 @@ VALUES
 (6,'Garden Glow Salad','Fresh',169,199,'Crunchy greens, avocado, seasonal vegetables and citrus dressing.','https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=1000&q=85','Fresh choice','15–20 min')
 ON DUPLICATE KEY UPDATE id=menu_dishes.id;
 
+CREATE TABLE IF NOT EXISTS users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  phone VARCHAR(20) NOT NULL,
+  gender ENUM('female','male','non_binary','prefer_not_to_say') NOT NULL,
+  email VARCHAR(254) NOT NULL UNIQUE,
+  password_hash CHAR(128) NOT NULL,
+  password_salt CHAR(32) NOT NULL,
+  role ENUM('customer','admin') NOT NULL DEFAULT 'customer',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_auth_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_auth_sessions_expiry (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS address_book (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  label VARCHAR(40) NOT NULL,
+  recipient VARCHAR(100) NOT NULL,
+  phone VARCHAR(20) NOT NULL,
+  line1 VARCHAR(200) NOT NULL,
+  line2 VARCHAR(200) NOT NULL DEFAULT '',
+  city VARCHAR(100) NOT NULL,
+  state VARCHAR(100) NOT NULL,
+  postal_code VARCHAR(20) NOT NULL,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_address_book_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_address_book_user (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS wishlist_items (
+  user_id INT NOT NULL,
+  dish_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id,dish_id),
+  CONSTRAINT fk_wishlist_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_wishlist_dish FOREIGN KEY (dish_id) REFERENCES menu_dishes(id) ON DELETE CASCADE,
+  INDEX idx_wishlist_dish (dish_id)
+);
+
 CREATE TABLE IF NOT EXISTS orders (
   id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NULL,
   customer_name VARCHAR(120) NOT NULL,
   phone VARCHAR(20) NOT NULL,
   address TEXT NOT NULL,
@@ -35,7 +85,9 @@ CREATE TABLE IF NOT EXISTS orders (
   extra_discount DECIMAL(10,2) NOT NULL DEFAULT 0,
   total DECIMAL(10,2) NOT NULL,
   status ENUM('Pending','Preparing','Out for delivery','Completed','Cancelled') NOT NULL DEFAULT 'Pending',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_orders_user (user_id)
 );
 
 CREATE TABLE IF NOT EXISTS order_items (

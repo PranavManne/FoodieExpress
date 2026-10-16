@@ -90,6 +90,20 @@ img { display: block; max-width: 100%; }
 
 .header-actions { display: flex; align-items: center; gap: 15px; }
 
+.header-account, .account-signout { color: var(--ink); font-size: 10px; font-weight: 700; white-space: nowrap; }
+
+.header-account { transition: color .2s; }
+
+.header-account:hover { color: var(--orange-dark); }
+
+.account-greeting { max-width: 100px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+.account-signout { padding: 0; border: 0; background: transparent; }
+
+.account-signout:hover { color: var(--orange-dark); }
+
+.header-account--mobile { display: none; }
+
 .header-order { display: flex; align-items: center; gap: 8px; padding: 12px 15px; background: var(--orange); color: white; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; transition: *background* .2s, transform .2s; }
 
 .header-order:hover { background: var(--orange-dark); transform: translateY(-1px); }
@@ -239,6 +253,10 @@ h1 em, h2 em { color: var(--orange); font-family: var(--serif); font-weight: 400
 .food-card:hover .food-card__image { transform: scale(1.045); }
 
 .food-tag { position: absolute; top: 13px; left: 13px; padding: 7px 10px; background: var(--paper); color: var(--ink); font-size: 8px; font-weight: 700; }
+
+.wishlist-button { position: absolute; top: 12px; right: 12px; width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid rgba(41,39,32,.12); border-radius: 50%; background: rgba(255,253,248,.94); color: var(--ink); font-size: 19px; line-height: 1; transition: color .2s, transform .2s, background .2s; }
+
+.wishlist-button:hover, .wishlist-button.is-saved { color: var(--orange-dark); transform: translateY(-1px) scale(1.06); }
 
 .add-button { position: absolute; right: 13px; bottom: 13px; width: 38px; height: 38px; border: 0; display: grid; place-items: center; background: var(--orange); color: white; font-size: 23px; font-weight: 300; transition: *background* .2s, transform .2s; }
 
@@ -578,6 +596,12 @@ h1 em, h2 em { color: var(--orange); font-family: var(--serif); font-weight: 400
 
   .header-actions { margin-left: auto; gap: 13px; }
 
+  .account-greeting { display: none; }
+
+  .header-account--mobile { display: inline; }
+
+  .header-account, .account-signout { font-size: 9px; }
+
   .mobile-menu { display: block; }
 
   .hero { display: flex; flex-direction: column; align-items: stretch; padding-top: 43px; padding-bottom: 74px; gap: 38px; }
@@ -641,6 +665,8 @@ h1 em, h2 em { color: var(--orange); font-family: var(--serif); font-weight: 400
   .food-card__image-wrap { height: 100%; min-height: 200px; }
 
   .food-tag { top: 9px; left: 8px; padding: 6px; font-size: 7px; }
+
+  .wishlist-button { top: 7px; right: 7px; width: 30px; height: 30px; }
 
   .add-button { width: 32px; height: 32px; right: 8px; bottom: 8px; }
 

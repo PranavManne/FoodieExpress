@@ -2,14 +2,519 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"label": "Build admin and storefront updates",
+			"label": "Find current API process",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/find-api-listener.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Restart FoodieExpress API process",
+			"type": "shell",
+			"command": "Stop-Process",
+			"args": [
+				"-Id",
+				"16668"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run FoodieExpress API",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"backend"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Build FoodieExpress frontend",
 			"type": "shell",
 			"command": "npm",
 			"args": [
 				"run",
 				"build"
 			],
-			"isBackground": false
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Remove temporary upload test image",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--input-type=module",
+				"-e",
+				"import { unlink } from 'node:fs/promises'; await unlink('server/uploads/426567aa-ff25-4a26-bef8-234ca71d535c.png'); console.log('Removed the temporary test image.');"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Remove temporary upload image",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"import(\"node:fs/promises\").then(({unlink}) => unlink(\"server/uploads/426567aa-ff25-4a26-bef8-234ca71d535c.png\")).then(() => console.log(\"Removed temporary test image\"))"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Clean upload test image",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/cleanup-upload-test.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Word document tooling",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"-c",
+				"import docx; print('python-docx available', docx.__version__)"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check document library",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"server/check-docx.py"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Install Word generation library",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"-m",
+				"pip",
+				"install",
+				"python-docx"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Create project Word document",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"server/create_project_document.py"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Verify project Word document",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"server/create_project_document.py"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check backend syntax",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--check",
+				"server/server.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Build auth frontend",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Inspect API listener process",
+			"type": "shell",
+			"command": "powershell.exe",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"$listener = Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction Stop | Select-Object -First 1; Get-CimInstance Win32_Process -Filter \"ProcessId = $($listener.OwningProcess)\" | Select-Object ProcessId,CommandLine | Format-List"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Apply auth database migration",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/apply-auth-migration.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Inspect port 5000 process",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/inspect-api-listener.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Stop outdated FoodieExpress API",
+			"type": "shell",
+			"command": "Stop-Process",
+			"args": [
+				"-Id",
+				"19448"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Start authenticated FoodieExpress API",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"backend"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Promote temporary auth test account",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/auth-test-account.js",
+				"promote"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Verify current API process",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/inspect-api-listener.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Restart authenticated API",
+			"type": "shell",
+			"command": "Stop-Process",
+			"args": [
+				"-Id",
+				"31372"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run updated FoodieExpress backend",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"backend"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Build login and admin updates",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Express syntax after auth",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--check",
+				"server/server.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Remove temporary authentication test account",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/auth-test-account.js",
+				"cleanup"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Update project Word documentation",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"server/update-project-doc.py"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Save updated project Word document",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"server/update-project-doc.py"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Migrate user profile fields",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/apply-user-profile-migration.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Find API before profile update restart",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/inspect-api-listener.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Restart API with profile fields",
+			"type": "shell",
+			"command": "Stop-Process",
+			"args": [
+				"-Id",
+				"10144"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run profile-enabled backend",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"backend"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check updated backend syntax",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--check",
+				"server/server.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Build phone gender registration",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Verify saved profile fields",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/verify-profile-fields.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Clean profile test accounts",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/cleanup-profile-test-accounts.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Build registration form updates",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Validate authentication backend syntax",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--check",
+				"server/server.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Confirm current backend health",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"fetch('http://localhost:5000/api/health').then(async r => { const body = await r.json(); console.log(JSON.stringify({status:r.status, database:body.database?.connected})); if (!r.ok || !body.database?.connected) process.exitCode=1; })"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Inspect backend before final restart",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/inspect-api-listener.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Restart backend for profile fields",
+			"type": "shell",
+			"command": "Stop-Process",
+			"args": [
+				"-Id",
+				"5680"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Start updated profile backend",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"backend"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check database admin role count",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/check-admin-role-count.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Remove temporary access check account",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/cleanup-admin-access-test.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check account roles after cleanup",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/check-admin-role-count.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Grant owner admin role",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/grant-owner-admin.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Verify owner admin role",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server/verify-owner-role.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Migrate FoodieExpress account tables",
+			"type": "shell",
+			"command": "npm run db:migrate:account",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Test FoodieExpress customer account API",
+			"type": "shell",
+			"command": "npm run test:account",
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

@@ -6,12 +6,55 @@ import "./admin.css";
 const blank = { name: "", category: "Mains", price: "", oldPrice: "", description: "", image: "", tag: "", time: "" };
 const categories = ["Mains", "Sides", "Desserts", "Fresh"];
 const statuses = ["Pending", "Preparing", "Out for delivery", "Completed", "Cancelled"];
+const maxImageSize = 5 * 1024 * 1024;
+const allowedImageTypes = ["image/jpeg", "image/png", "image/webp"];
+
+function DishThumbnail({ src, alt = "", className = "admin-dish-row__image" }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (!src || failed) {
+    return <span className="admin-dish-placeholder" aria-hidden="true">✳</span>;
+  }
+
+  return <img className={className} src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} />;
+}
+
+function DishImagePreview({ src }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (!src) return null;
+
+  return (
+    <div className={`admin-image-preview${failed ? " admin-image-preview--error" : ""}`}>
+      {failed ? (
+        <>
+          <span aria-hidden="true">✳</span>
+          <p role="status">This image could not be displayed. Choose a different image file.</p>
+        </>
+      ) : (
+        <img src={src} alt="Preview of the dish" onError={() => setFailed(true)} />
+      )}
+    </div>
+  );
+}
 
 export default function Admin() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [accessDenied, setAccessDenied] = useState(false);
   const [dishes, setDishes] = useState([]);
   const [orders, setOrders] = useState([]);
   const [form, setForm] = useState(blank);
   const [editing, setEditing] = useState(null);
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
   const [tab, setTab] = useState("menu");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -23,13 +66,19 @@ export default function Admin() {
     try {
       response = await fetch(`${API_BASE_URL}${path}`, {
         ...options,
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
       });
     } catch {
       throw new Error("Could not reach the backend. Check that the API server is running.");
     }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `Request failed (HTTP ${response.status}).`);
+    if (!response.ok) {
+      if (path === "/uploads/images" && response.status === 404) {
+        throw new Error("The running backend does not have image upload enabled yet. Stop it with Ctrl+C, restart it using npm run backend, then try saving again.");
+      }
+      throw new Error(data.error || `Request failed (HTTP ${response.status}).`);
+    }
     return data;
   }
 
@@ -48,8 +97,37 @@ export default function Admin() {
   }
 
   useEffect(() => {
-    refresh();
+    let active = true;
+    request("/auth/me")
+      .then(({ user }) => {
+        if (!active) return;
+        if (!user) {
+          window.location.replace("/login?next=admin");
+          return;
+        }
+        if (user.role !== "admin") {
+          setCurrentUser(user);
+          setAccessDenied(true);
+          return;
+        }
+        setCurrentUser(user);
+        refresh();
+      })
+      .catch(() => {
+        if (active) window.location.replace("/login?next=admin");
+      });
+    return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreview("");
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(imageFile);
+    setImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [imageFile]);
 
   function updateField(event) {
     const { name, value } = event.target;
@@ -59,6 +137,23 @@ export default function Admin() {
   function resetForm() {
     setEditing(null);
     setForm({ ...blank });
+    setImageFile(null);
+  }
+
+  function selectImage(event) {
+    const selected = event.target.files?.[0];
+    event.target.value = "";
+    if (!selected) return;
+    if (!allowedImageTypes.includes(selected.type)) {
+      setError("Choose a JPEG, PNG, or WebP image.");
+      return;
+    }
+    if (selected.size > maxImageSize) {
+      setError("Choose an image smaller than 5 MB.");
+      return;
+    }
+    setError("");
+    setImageFile(selected);
   }
 
   async function save(e) {
@@ -70,6 +165,15 @@ export default function Admin() {
     try {
       const wasEditing = editing !== null;
       const body = { ...form, price: Number(form.price), oldPrice: Number(form.oldPrice) };
+      if (imageFile) {
+        const uploadedImage = await request("/uploads/images", {
+          method: "POST",
+          headers: { "Content-Type": imageFile.type },
+          body: imageFile,
+        });
+        const apiOrigin = API_BASE_URL.replace(/\/api\/?$/, "");
+        body.image = new URL(uploadedImage.path, `${apiOrigin}/`).href;
+      }
       const result = await request(wasEditing ? `/foods/${editing}` : "/foods", {
         method: wasEditing ? "PUT" : "POST",
         body: JSON.stringify(body),
@@ -98,6 +202,7 @@ export default function Admin() {
       tag: d.tag || "",
       time: d.time || "",
     });
+    setImageFile(null);
     setTab("menu");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -127,6 +232,43 @@ export default function Admin() {
     }
   }
 
+  async function signOut() {
+    try {
+      await request("/auth/logout", { method: "POST" });
+      window.location.assign("/login?next=admin");
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  if (accessDenied) {
+    return (
+      <main className="admin-page">
+        <div className="admin-wrap">
+          <header className="admin-header">
+            <a className="admin-brand" href="/" aria-label="FoodieExpress storefront">
+              <span className="admin-brand__mark">f<span>.</span></span>
+              <span>foodie<small>express</small></span>
+            </a>
+            <a className="admin-back-link" href="/">← Back to storefront</a>
+          </header>
+          <section className="admin-access-card" role="alert">
+            <span className="admin-eyebrow">ADMIN ACCESS REQUIRED</span>
+            <h1>This account is a customer account.</h1>
+            <p>
+              Sign in with an administrator account to manage dishes and orders. If you own this store,
+              an administrator must grant your registered email the admin role in the database.
+            </p>
+            <div className="admin-access-actions">
+              <a className="admin-primary-button" href="/login?next=admin">Sign in as admin</a>
+              <button className="admin-secondary-button" type="button" onClick={signOut}>Sign out</button>
+            </div>
+          </section>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="admin-page">
       <div className="admin-wrap">
@@ -136,6 +278,10 @@ export default function Admin() {
             <span>foodie<small>express</small></span>
           </a>
           <a className="admin-back-link" href="/">← Back to storefront</a>
+          <div className="admin-account">
+            {currentUser && <span>{currentUser.name}</span>}
+            <button type="button" onClick={signOut}>Sign out</button>
+          </div>
         </header>
 
         <section className="admin-intro">
@@ -169,7 +315,7 @@ export default function Admin() {
           <div className="admin-notice admin-notice--error" role="alert">
             <strong>Something needs attention</strong>
             <span>{error}</span>
-            <span>Check the backend and database, then use Refresh to try again.</span>
+            <span>{error.includes("image upload enabled") ? "Your selected image and dish details are still in the form. They will be kept if you restart the backend and retry." : "Review the message above and correct the issue before trying again."}</span>
           </div>
         )}
 
@@ -212,18 +358,49 @@ export default function Admin() {
                   <span>Preparation time</span>
                   <input name="time" value={form.time} onChange={updateField} maxLength={50} placeholder="20–25 min" />
                 </label>
-                <label className="admin-field admin-field--wide">
-                  <span>Food image URL</span>
-                  <input name="image" type="url" value={form.image} onChange={updateField} maxLength={2048} placeholder="https://…" />
-                  <small>Use a direct, public HTTPS image URL to show a photo on the storefront.</small>
-                </label>
+                <div className="admin-field admin-field--wide">
+                  <span>Dish image</span>
+                  <span className="admin-image-help">Upload a JPEG, PNG, or WebP image from your phone or computer (maximum 5 MB).</span>
+                  <label className={`admin-image-upload${busy ? " admin-image-upload--disabled" : ""}`}>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      aria-label="Choose dish image"
+                      onChange={selectImage}
+                      disabled={busy}
+                    />
+                    <span className="admin-image-upload__icon" aria-hidden="true">↑</span>
+                    <span className="admin-image-upload__copy">
+                      <strong>{imageFile ? "Choose a different image" : "Choose an image"}</strong>
+                      <small>{imageFile ? imageFile.name : "Browse photos on this device"}</small>
+                    </span>
+                    <span className="admin-image-upload__browse">Browse</span>
+                  </label>
+                  {(imageFile || form.image) && (
+                    <div className="admin-image-selected">
+                      <DishImagePreview src={imagePreview || form.image.trim()} />
+                      {imageFile && <span className="admin-image-selected__name">{imageFile.name}</span>}
+                      <button
+                        className="admin-image-clear"
+                        type="button"
+                        onClick={() => {
+                          setImageFile(null);
+                          setForm((current) => ({ ...current, image: "" }));
+                        }}
+                        disabled={busy}
+                      >
+                        Remove image
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <label className="admin-field admin-field--wide">
                   <span>Description</span>
                   <textarea name="description" value={form.description} onChange={updateField} maxLength={5000} rows={3} placeholder="A short description customers will see…" />
                 </label>
                 <div className="admin-form-actions admin-field--wide">
                   <button className="admin-primary-button" type="submit" disabled={busy}>
-                    {busy ? "Saving to database…" : editing ? "Save dish changes" : "Add dish to menu"}
+                    {busy ? imageFile ? "Uploading image & saving…" : "Saving to database…" : editing ? "Save dish changes" : "Add dish to menu"}
                     {!busy && <span aria-hidden="true">↗</span>}
                   </button>
                   {editing && <button className="admin-secondary-button" type="button" onClick={resetForm} disabled={busy}>Cancel editing</button>}
@@ -252,11 +429,7 @@ export default function Admin() {
               <div className="admin-dish-list">
                 {dishes.map((dish) => (
                   <article className="admin-dish-row" key={dish.id}>
-                    {dish.image ? (
-                      <img src={dish.image} alt="" loading="lazy" />
-                    ) : (
-                      <span className="admin-dish-placeholder" aria-hidden="true">✳</span>
-                    )}
+                    <DishThumbnail src={dish.image} />
                     <div className="admin-dish-info">
                       <span className="admin-dish-category">{dish.category}{dish.tag ? ` · ${dish.tag}` : ""}</span>
                       <h3>{dish.name}</h3>

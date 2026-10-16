@@ -65,7 +65,7 @@ function BagIcon() {
 
 
 
-function FoodCard({ dish, onAdd }) {
+function FoodCard({ dish, onAdd, onWishlist, wishlisted }) {
 
   const discount = Math.round(
 
@@ -94,6 +94,16 @@ function FoodCard({ dish, onAdd }) {
         />
 
         <span className="food-tag">{dish.tag}</span>
+
+        <button
+          className={`wishlist-button${wishlisted ? " is-saved" : ""}`}
+          type="button"
+          onClick={() => onWishlist(dish)}
+          aria-label={`${wishlisted ? "Remove" : "Add"} ${dish.name} ${wishlisted ? "from" : "to"} wishlist`}
+          aria-pressed={wishlisted}
+        >
+          {wishlisted ? "♥" : "♡"}
+        </button>
 
         <button
 
@@ -175,6 +185,7 @@ function loadSavedCart() {
 }
 
 export default function App() {
+  const [user, setUser] = useState(null);
   const [dishes, setDishes] = useState([]);
   const [menuLoading, setMenuLoading] = useState(true);
   const [menuError, setMenuError] = useState("");
@@ -183,6 +194,8 @@ export default function App() {
   const [customerAddress, setCustomerAddress] = useState("");
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [activeCategory, setActiveCategory] = useState("All");
+  const [wishlistIds, setWishlistIds] = useState([]);
+  const [savedAddresses, setSavedAddresses] = useState([]);
 
   const [cart, setCart] = useState(loadSavedCart);
 
@@ -208,6 +221,96 @@ export default function App() {
 
   useEffect(() => () => {
     if (toastTimeout.current) window.clearTimeout(toastTimeout.current);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE_URL}/auth/me`, { credentials: "include" })
+      .then(async (response) => {
+        if (response.status === 401) return null;
+        if (!response.ok) throw new Error("Could not check your account.");
+        return response.json();
+      })
+      .then((data) => {
+        if (active && data?.user) setUser(data.user);
+      })
+      .catch((error) => console.error("Account status could not be loaded:", error));
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      if (!customerName) setCustomerName(user.name);
+      if (!customerPhone) setCustomerPhone(user.phone || "");
+    }
+  }, [user, customerName, customerPhone]);
+
+  useEffect(() => {
+    let active = true;
+    if (!user) {
+      setSavedAddresses([]);
+      return () => { active = false; };
+    }
+    fetch(`${API_BASE_URL}/account/addresses`, { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load saved addresses.");
+        return response.json();
+      })
+      .then((addresses) => {
+        if (!active) return;
+        setSavedAddresses(addresses);
+        const defaultAddress = addresses.find((address) => address.isDefault);
+        if (defaultAddress) {
+          setCustomerName((current) => current || defaultAddress.recipient);
+          setCustomerPhone((current) => current || defaultAddress.phone);
+          setCustomerAddress((current) => current || [
+            defaultAddress.line1,
+            defaultAddress.line2,
+            defaultAddress.city,
+            defaultAddress.state,
+            defaultAddress.postalCode,
+          ].filter(Boolean).join(", "));
+        }
+      })
+      .catch((error) => console.error("Saved addresses could not be loaded:", error));
+    return () => { active = false; };
+  }, [user]);
+
+  useEffect(() => {
+    let active = true;
+    if (!user) {
+      setWishlistIds([]);
+      return () => { active = false; };
+    }
+    fetch(`${API_BASE_URL}/account/wishlist`, { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load your wishlist.");
+        return response.json();
+      })
+      .then((items) => {
+        if (active) setWishlistIds(items.map((item) => item.id));
+      })
+      .catch((error) => console.error("Wishlist could not be loaded:", error));
+    return () => { active = false; };
+  }, [user]);
+
+  useEffect(() => {
+    function profileUpdated(event) {
+      setUser(event.detail);
+      setCustomerName(event.detail.name);
+      setCustomerPhone(event.detail.phone || "");
+    }
+    function wishlistUpdated(event) {
+      setWishlistIds((current) => event.detail.saved
+        ? [...new Set([...current, event.detail.dishId])]
+        : current.filter((id) => id !== event.detail.dishId));
+    }
+    window.addEventListener("foodieexpress:profile-updated", profileUpdated);
+    window.addEventListener("foodieexpress:wishlist-updated", wishlistUpdated);
+    return () => {
+      window.removeEventListener("foodieexpress:profile-updated", profileUpdated);
+      window.removeEventListener("foodieexpress:wishlist-updated", wishlistUpdated);
+    };
   }, []);
 
   useEffect(() => {
@@ -333,6 +436,31 @@ export default function App() {
 
   }
 
+  async function toggleWishlist(dish) {
+    if (!user) {
+      window.location.assign("/login?next=wishlist");
+      return;
+    }
+    const isSaved = wishlistIds.includes(dish.id);
+    try {
+      const response = await fetch(`${API_BASE_URL}/account/wishlist/${dish.id}`, {
+        method: isSaved ? "DELETE" : "POST",
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not update your wishlist.");
+      setWishlistIds((current) => isSaved
+        ? current.filter((id) => id !== dish.id)
+        : [...new Set([...current, dish.id])]);
+      notify(isSaved ? `${dish.name} removed from your wishlist` : `${dish.name} saved to your wishlist`);
+      window.dispatchEvent(new CustomEvent("foodieexpress:wishlist-updated", {
+        detail: { dishId: dish.id, saved: !isSaved },
+      }));
+    } catch (error) {
+      notify(error.message || "Could not update your wishlist.", true, 4000);
+    }
+  }
+
 
 
   function handleSubscribe(event) {
@@ -349,6 +477,20 @@ export default function App() {
 
     setEmail("");
 
+  }
+
+  async function signOut() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Could not sign out. Please try again.");
+      setUser(null);
+      notify("You have been signed out.");
+    } catch (error) {
+      notify(error.message || "Could not sign out. Please try again.", true, 4000);
+    }
   }
 
 
@@ -370,6 +512,7 @@ export default function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/orders`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerName: customerName.trim(),
@@ -476,6 +619,16 @@ export default function App() {
 
 
         <div className="header-actions">
+          {user ? (
+            <>
+              {user.role === "admin" && <a className="header-account" href="/admin">Admin</a>}
+              <a className="account-greeting" href="/account">Hi, {user.name}</a>
+              <a className="header-account header-account--mobile" href="/account">My account</a>
+              <button className="account-signout" type="button" onClick={signOut}>Sign out</button>
+            </>
+          ) : (
+            <a className="header-account" href="/login">Sign in</a>
+          )}
 
           <a className="header-order" href="#menu">
 
@@ -868,7 +1021,13 @@ export default function App() {
               <p>No dishes available in this category.</p>
             ) : (
               filteredDishes.map((dish) => (
-                <FoodCard key={dish.id} dish={dish} onAdd={addToBag} />
+                <FoodCard
+                  key={dish.id}
+                  dish={dish}
+                  onAdd={addToBag}
+                  onWishlist={toggleWishlist}
+                  wishlisted={wishlistIds.includes(dish.id)}
+                />
               ))
             )}
           </div>
@@ -1813,12 +1972,32 @@ export default function App() {
 
                   <form className="checkout-form" onSubmit={handleCheckout}>
                     <h3>Delivery details</h3>
+                    {savedAddresses.length > 0 && (
+                      <select className="checkout-input" defaultValue=""
+                        aria-label="Use a saved delivery address"
+                        onChange={(event) => {
+                          const address = savedAddresses.find((item) => String(item.id) === event.target.value);
+                          if (!address) return;
+                          setCustomerName(address.recipient);
+                          setCustomerPhone(address.phone);
+                          setCustomerAddress([
+                            address.line1, address.line2, address.city, address.state, address.postalCode,
+                          ].filter(Boolean).join(", "));
+                        }}>
+                        <option value="">Enter delivery details or use a saved address</option>
+                        {savedAddresses.map((address) => (
+                          <option key={address.id} value={address.id}>
+                            {address.label} — {address.line1}, {address.city}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <input className="checkout-input" type="text" placeholder="Your full name"
                       value={customerName} onChange={(event) => setCustomerName(event.target.value)}
                       autoComplete="name" maxLength={120} required />
                     <input className="checkout-input" type="tel" placeholder="Phone number"
                       value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)}
-                      autoComplete="tel" maxLength={20} pattern="^[+()0-9\\s-]{7,20}$" required />
+                      autoComplete="tel" maxLength={20} required />
                     <textarea className="checkout-input" placeholder="Full delivery address"
                       value={customerAddress} onChange={(event) => setCustomerAddress(event.target.value)}
                       autoComplete="street-address" rows={3} maxLength={1000} required />
