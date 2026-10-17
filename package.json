@@ -8,7 +8,11 @@
     "frontend": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "backend": "node server/server.js",
     "db:migrate:account": "node server/migrate-customer-account.js",
+    "db:migrate:offers": "node server/migrate-special-offers.js",
+    "db:migrate:locations": "node server/migrate-order-delivery-locations.js",
+    "db:migrate:gallery": "node server/migrate-food-gallery.js",
     "test:account": "node server/test-customer-account.js",
+    "test:offers": "node server/test-special-offers.js",
     "build": "vite build",
     "preview": "vite preview"
   },

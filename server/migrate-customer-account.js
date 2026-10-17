@@ -56,6 +56,35 @@ async function hasIndex(tableName, columnName) {
   return rows.length > 0;
 }
 
+async function hasNamedIndex(tableName, indexName) {
+  const [rows] = await db.query(
+    "SELECT 1 FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name=? LIMIT 1",
+    [tableName, indexName],
+  );
+  return rows.length > 0;
+}
+
+async function primaryKeyColumns(tableName) {
+  const [rows] = await db.query(
+    `SELECT column_name AS columnName
+     FROM information_schema.key_column_usage
+     WHERE table_schema=DATABASE() AND table_name=? AND constraint_name='PRIMARY'
+     ORDER BY ordinal_position`,
+    [tableName],
+  );
+  return rows.map((row) => row.columnName);
+}
+
+async function hasForeignKey(tableName, columnName, referencedTable) {
+  const [rows] = await db.query(
+    `SELECT 1 FROM information_schema.key_column_usage
+     WHERE table_schema=DATABASE() AND table_name=? AND column_name=?
+       AND referenced_table_name=? LIMIT 1`,
+    [tableName, columnName, referencedTable],
+  );
+  return rows.length > 0;
+}
+
 async function hasOrdersUserForeignKey() {
   const [rows] = await db.query(
     `SELECT 1 FROM information_schema.key_column_usage
@@ -88,15 +117,57 @@ try {
     CONSTRAINT fk_address_book_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_address_book_user (user_id)
   )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS wishlist_lists (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    name VARCHAR(60) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_wishlist_lists_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_wishlist_lists_user_name (user_id,name)
+  )`);
   await db.query(`CREATE TABLE IF NOT EXISTS wishlist_items (
     user_id INT NOT NULL,
     dish_id INT NOT NULL,
+    list_id INT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id,dish_id),
     CONSTRAINT fk_wishlist_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     CONSTRAINT fk_wishlist_dish FOREIGN KEY (dish_id) REFERENCES menu_dishes(id) ON DELETE CASCADE,
     INDEX idx_wishlist_dish (dish_id)
   )`);
+  if (!(await hasColumn("wishlist_items", "list_id"))) {
+    await db.query("ALTER TABLE wishlist_items ADD COLUMN list_id INT NULL AFTER dish_id");
+  }
+  await db.query(
+    `INSERT INTO wishlist_lists (user_id,name)
+     SELECT DISTINCT w.user_id,'My wishlist'
+     FROM wishlist_items w
+     WHERE NOT EXISTS (
+       SELECT 1 FROM wishlist_lists l WHERE l.user_id=w.user_id AND l.name='My wishlist'
+     )`,
+  );
+  await db.query(
+    `UPDATE wishlist_items w
+     JOIN wishlist_lists l ON l.user_id=w.user_id AND l.name='My wishlist'
+     SET w.list_id=l.id
+     WHERE w.list_id IS NULL`,
+  );
+  await db.query("ALTER TABLE wishlist_items MODIFY list_id INT NOT NULL");
+  if (!(await hasNamedIndex("wishlist_items", "idx_wishlist_user"))) {
+    await db.query("ALTER TABLE wishlist_items ADD INDEX idx_wishlist_user (user_id)");
+  }
+  const wishlistPrimaryKey = await primaryKeyColumns("wishlist_items");
+  if (wishlistPrimaryKey.join(",") !== "list_id,dish_id") {
+    await db.query("ALTER TABLE wishlist_items DROP PRIMARY KEY, ADD PRIMARY KEY (list_id,dish_id)");
+  }
+  if (!(await hasIndex("wishlist_items", "list_id"))) {
+    await db.query("ALTER TABLE wishlist_items ADD INDEX idx_wishlist_list (list_id)");
+  }
+  if (!(await hasForeignKey("wishlist_items", "list_id", "wishlist_lists"))) {
+    await db.query(
+      "ALTER TABLE wishlist_items ADD CONSTRAINT fk_wishlist_list FOREIGN KEY (list_id) REFERENCES wishlist_lists(id) ON DELETE CASCADE",
+    );
+  }
 
   if (!(await hasColumn("orders", "user_id"))) {
     await db.query("ALTER TABLE orders ADD COLUMN user_id INT NULL AFTER id");

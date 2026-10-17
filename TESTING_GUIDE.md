@@ -10,9 +10,10 @@ This guide tests the existing React/Vite storefront and admin dashboard, Express
 - Menu endpoint: `GET /api/foods` (plural).
 - Order endpoints: `POST /api/orders`, `GET /api/orders`, `GET /api/orders/:id`, and `PATCH /api/orders/:id/status`.
 - Admin menu endpoints: `GET /api/foods`, `POST /api/foods`, `PUT /api/foods/:id`, and `DELETE /api/foods/:id`.
+- Admin offer endpoints: `GET/POST /api/admin/offers`, `PUT/DELETE /api/admin/offers/:id` (administrator session required).
 - Menu data is read from `foodieexpress.menu_dishes`. Do not assume the legacy `food_items` table powers the current storefront.
 - Order persistence requires `orders` and `order_items`.
-- The admin page has **no login protection**. Use it only in a trusted local environment.
+- Admin pages and management APIs require an administrator session; customer accounts cannot manage offers.
 - Checkout records orders but does **not** process payments.
 - Never paste, print, or commit the real MySQL password. The backend reads it from `server\.env`.
 - Do not delete, truncate, or modify existing menu/order data during testing. For cleanup, target only the uniquely named test order or test menu item you created.
@@ -63,6 +64,8 @@ This guide tests the existing React/Vite storefront and admin dashboard, Express
    ```
 
    **Pass:** the MySQL service is Running and TCP port 3306 is reachable.
+
+   Before starting the backend on an existing installation, run `npm run db:migrate:account` and `npm run db:migrate:offers` from the project root after applying any missing base/order/auth migrations. The offers migration creates special-offer tables, adds offer title/discount snapshots to order items, and seeds the recommended-mains BOGO without deleting existing data.
 
 6. Check the application ports before starting anything:
 
@@ -207,7 +210,7 @@ npm run build
    $foods | Format-Table id, name, category, price, oldPrice
    ```
 
-   **Pass:** HTTP 200, a JSON array, database-backed dish records, numeric `price` and `oldPrice`, and the expected fields `id`, `name`, `category`, `description`, `image`, `tag`, and `time`. Compare the API's row count with `SELECT COUNT(*) FROM menu_dishes`.
+   **Pass:** HTTP 200, a JSON array, database-backed dish records, numeric `price` and `oldPrice`, and the expected fields `id`, `name`, `category`, `description`, `image`, `tag`, and `time`. Dishes include `isRecommended`, `offer` (or `null`), and `buyOneGetOne` values. Compare the API's row count with `SELECT COUNT(*) FROM menu_dishes`.
 
 2. Fetch an unknown route and submit invalid JSON/order/menu input. Each request must fail safely; no SQL error, credentials, or stack trace should appear in the response.
 
@@ -243,16 +246,22 @@ npm run build
    - Network: `GET http://localhost:5503/api/foods` returns HTTP 200.
    - Elements/UI: menu dishes match the records served by `/api/foods`.
 
-3. Test menu loading states:
+3. Verify the five storefront pages by opening Home (`/`), Our menu (`/menu`), Our story (`/story`), Kind words (`/reviews`), and Contact (`/contact`). Each route should render its corresponding content and mark its navigation link active. Click the header and footer links to confirm navigation works. At a mobile viewport, open the navigation toggle, select each destination, and confirm the matching page loads.
+
+4. Test menu loading states:
    - With the backend running, menu cards appear and the loading message disappears.
    - Stop the backend briefly and reload: a useful “Unable to load the menu” message appears; the page does not crash.
    - Restart the backend and reload: the menu recovers.
 
-4. Test categories using the tabs. With the verified six-row sample menu, expected counts are All: 6; Mains: 3; Sides: 1; Desserts: 1; Fresh: 1. If the database menu has changed, compare each displayed category to the current MySQL/API data instead.
+5. In `/account` > Wishlist, create multiple sections with custom names (for example, “Wife”, “Son”, or “Daughter”). On the menu, click a dish's heart and verify the section picker opens; select a section and confirm the dish appears there. Open the heart again and save the dish to another section; verify removing it from one section does not remove it from the other. Verify lists and dishes persist after reloading; rename and delete a test section, confirming the delete prompt explains that its dishes are removed from that section only.
 
-5. **Search feature:** the current storefront has category tabs but no search box/search behavior. Mark search tests **NOT APPLICABLE** rather than treating a nonexistent feature as a failure.
+6. On both `/` and `/menu`, verify the restaurant recommendations appear above the main menu content. The initial recommended mains (Bestseller, Chef's pick, and Fan favourite) have an editable BOGO offer after migration. Add a pair and confirm one serving is free. Promotion labels and prices should match the currently active offer type.
 
-6. Test cart and quantity controls:
+7. Test categories using the tabs. With the verified six-row sample menu, expected counts are All: 6; Mains: 3; Sides: 1; Desserts: 1; Fresh: 1. If the database menu has changed, compare each displayed category to the current MySQL/API data instead.
+
+8. **Search feature:** the current storefront has category tabs but no search box/search behavior. Mark search tests **NOT APPLICABLE** rather than treating a nonexistent feature as a failure.
+
+9. Test cart and quantity controls:
    - Add a dish; the bag count and cart item both increase.
    - Add the same dish repeatedly; its quantity and line total increase correctly.
    - Decrease quantity; it decreases by one.
@@ -261,12 +270,14 @@ npm run build
    - Reload the page; verify cart contents and bag count persist.
    - Remove remaining items; cart count becomes zero and the empty-cart state is shown.
 
-7. Test totals using the current sample prices:
+10. Test totals using the current sample prices:
    - Three Hyderabadi Dum Biryani at ₹249 each: original price ₹897, item savings ₹150, subtotal ₹747, extra discount ₹75, final total ₹672.
    - One biryani: subtotal ₹249 and no extra discount.
    - Two biryanis: subtotal ₹498 and no extra discount (the threshold is **above** ₹500, not ₹500 or more).
    - Add enough items to make subtotal greater than ₹500: the order discount is 10%, rounded to the nearest whole rupee, and is subtracted from subtotal.
    - Verify the displayed “amount more” hint at or below the threshold and the discount message above it.
+
+11. With the backend and MySQL running, run `npm run test:offers`. **Pass:** the test verifies protected admin access, offer validation, all-dish and selected-dish scopes, BOGO/percentage/fixed checkout calculations, bundle visibility and price validation, bundle-only checkout and order-item snapshots, and no-stacking replacement. It removes its temporary account/orders/offers/bundles and restores original offer activation states.
 
 8. Test checkout validation from the cart:
    - Submit with no customer fields: browser validation should block submission.
@@ -339,8 +350,9 @@ $created
 
    **Pass:** the newly created order appears in the returned array.
 
-4. Open **http://127.0.0.1:5173/admin**:
-   - The Orders tab shows the test order and totals.
+4. Open **http://127.0.0.1:5173/admin/login** and sign in with an administrator account:
+   - The admin dashboard shows menu, total order, and pending order counts.
+   - The Manage orders page shows the test order and totals.
    - “View order details” opens `/api/orders/<id>` and shows the same record.
    - Change status to `Preparing`; refresh and verify it persists.
    - Optionally test `Out for delivery`, `Completed`, and `Cancelled` using only the test order. Do not cancel or alter someone else's order.
@@ -376,7 +388,7 @@ Do not use broad deletes, wildcard customer names, `TRUNCATE`, or `DROP`.
 
 ## 9. Test the admin menu CRUD without touching sample dishes
 
-1. Open **http://127.0.0.1:5173/admin** and the Menu tab.
+1. Open **http://127.0.0.1:5173/admin/login**, sign in as an admin, then open **Manage menu** at `/admin/menu`.
 2. Create a uniquely named item, e.g. `E2E QA Dish <date-time>`, with a supported category, sale price, higher original price, description, HTTPS image URL, tag, and preparation time.
 3. **Pass:** a success message appears, the new item appears in admin, and `GET /api/foods` returns it.
 4. Edit only this test dish. Change its description/price and save.
@@ -390,6 +402,18 @@ Do not use broad deletes, wildcard customer names, `TRUNCATE`, or `DROP`.
    ```
 
    It should return no row. Existing seeded/customer dishes must remain.
+
+## 10. Test admin special offers
+
+1. Sign in at `/admin/login`, open **Special offers** at `/admin/offers`, and verify the seeded recommended-mains BOGO appears after migration.
+2. Create an inactive offer scoped to all dishes, then verify it appears as paused and does not change public menu pricing.
+3. Create a selected-dish offer. Test Buy 1 Get 1 Free, percentage off (1–100%), and fixed amount off. The public menu cards, recommendation cards, and cart should show the active promotion and adjusted unit/line prices.
+4. Place a test order for an eligible dish and verify the amount is recalculated by the backend. Inspect the order through `/api/orders/<id>` or the customer order history; its item should retain `offer_title` and `offer_discount`.
+5. Activate another offer for an overlapping dish. **Pass:** the prior offer is automatically paused, and the menu/cart apply only the newly active offer. For all-dishes offers, overlapping active offers are paused across the menu.
+6. Pause or delete only the test offers you created. Leave the seeded promotion and other existing offers unchanged.
+7. In **Manage menu**, toggle the recommendation control on dishes and refresh Home and Our menu. **Pass:** only dishes marked featured by an admin appear in the recommendation sections.
+8. In **Special offers**, toggle whether an active offer is shown in the app. **Pass:** this display setting is independent from its active pricing state.
+9. Create a bundle with at least two menu dishes, distinct component quantities, and a price no higher than their combined current menu price. **Pass:** active and app-visible bundles appear on both Home and Our menu; paused or hidden bundles do not. Add one from either section, verify its components, quantity, and price in the cart, then place a bundle-only order and verify the saved bundle snapshot. Confirm a bundle price above the combined menu price is rejected.
 
 ## 10. CORS, API configuration, and request security checks
 

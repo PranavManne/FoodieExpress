@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { API_BASE_URL } from "./api.js";
 import "./auth.css";
 
-export default function AuthPage({ mode }) {
+export default function AuthPage({ mode, adminLogin: adminRouteLogin = false }) {
   const isRegister = mode === "register";
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -12,7 +12,7 @@ export default function AuthPage({ mode }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const next = new URLSearchParams(window.location.search).get("next");
-  const adminLogin = next === "admin";
+  const adminLogin = adminRouteLogin || next === "admin";
   const accountLogin = next === "account" || next === "wishlist";
 
   async function submit(event) {
@@ -40,7 +40,7 @@ export default function AuthPage({ mode }) {
       }
       window.location.assign(
         adminLogin || result.user.role === "admin"
-          ? "/admin"
+          ? "/admin/dashboard"
           : accountLogin
             ? "/account"
             : "/",

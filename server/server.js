@@ -4,7 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -414,11 +414,57 @@ app.delete("/api/account/addresses/:id", requireAuth, async (req, res) => {
   }
 });
 
+async function ensureDefaultWishlist(userId) {
+  await db.query(
+    `INSERT INTO wishlist_lists (user_id,name)
+     VALUES (?,'My wishlist')
+     ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
+    [userId],
+  );
+  const [rows] = await db.query(
+    "SELECT id FROM wishlist_lists WHERE user_id=? AND name='My wishlist'",
+    [userId],
+  );
+  return rows[0].id;
+}
+
+app.get("/api/account/wishlist/lists", requireAuth, async (req, res) => {
+  try {
+    await ensureDefaultWishlist(req.authUser.id);
+    const [[lists], [dishes]] = await Promise.all([
+      db.query(
+        "SELECT id,name FROM wishlist_lists WHERE user_id=? ORDER BY created_at,id",
+        [req.authUser.id],
+      ),
+      db.query(
+        `SELECT d.id,d.name,d.category,d.price,d.old_price AS oldPrice,d.description,d.image,d.tag,d.prep_time AS time,
+         w.list_id AS listId
+         FROM wishlist_items w JOIN menu_dishes d ON d.id=w.dish_id
+         WHERE w.user_id=? ORDER BY w.created_at DESC`,
+        [req.authUser.id],
+      ),
+    ]);
+    const grouped = new Map(lists.map((list) => [list.id, { ...list, dishes: [] }]));
+    for (const dish of dishes) grouped.get(dish.listId)?.dishes.push({
+      ...dish,
+      price: Number(dish.price),
+      oldPrice: Number(dish.oldPrice),
+    });
+    return res.json([...grouped.values()]);
+  } catch (error) {
+    console.error("Load wishlist sections:", error.message);
+    return res.status(500).json({ error: "Could not load your wishlist sections." });
+  }
+});
+
 app.get("/api/account/wishlist", requireAuth, async (req, res) => {
   try {
+    await ensureDefaultWishlist(req.authUser.id);
     const [rows] = await db.query(
-      `SELECT d.id,d.name,d.category,d.price,d.old_price AS oldPrice,d.description,d.image,d.tag,d.prep_time AS time
+      `SELECT d.id,d.name,d.category,d.price,d.old_price AS oldPrice,d.description,d.image,d.tag,d.prep_time AS time,
+       l.id AS listId,l.name AS listName
        FROM wishlist_items w JOIN menu_dishes d ON d.id=w.dish_id
+       JOIN wishlist_lists l ON l.id=w.list_id AND l.user_id=w.user_id
        WHERE w.user_id=? ORDER BY w.created_at DESC`,
       [req.authUser.id],
     );
@@ -429,13 +475,85 @@ app.get("/api/account/wishlist", requireAuth, async (req, res) => {
   }
 });
 
+app.post("/api/account/wishlist/lists", requireAuth, async (req, res) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name || name.length > 60) {
+    return res.status(400).json({ error: "List names must contain between 1 and 60 characters." });
+  }
+  try {
+    const [result] = await db.query(
+      "INSERT INTO wishlist_lists (user_id,name) VALUES (?,?)",
+      [req.authUser.id, name],
+    );
+    return res.status(201).json({ id: result.insertId, name });
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "You already have a wishlist section with that name." });
+    }
+    console.error("Create wishlist section:", error.message);
+    return res.status(500).json({ error: "Could not create this wishlist section." });
+  }
+});
+
+app.put("/api/account/wishlist/lists/:listId", requireAuth, async (req, res) => {
+  const listId = Number(req.params.listId);
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!Number.isInteger(listId) || listId < 1) return res.status(400).json({ error: "Invalid wishlist section ID." });
+  if (!name || name.length > 60) {
+    return res.status(400).json({ error: "List names must contain between 1 and 60 characters." });
+  }
+  try {
+    const [result] = await db.query(
+      "UPDATE wishlist_lists SET name=? WHERE id=? AND user_id=?",
+      [name, listId, req.authUser.id],
+    );
+    if (!result.affectedRows) return res.status(404).json({ error: "Wishlist section not found." });
+    return res.json({ id: listId, name });
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "You already have a wishlist section with that name." });
+    }
+    console.error("Rename wishlist section:", error.message);
+    return res.status(500).json({ error: "Could not rename this wishlist section." });
+  }
+});
+
+app.delete("/api/account/wishlist/lists/:listId", requireAuth, async (req, res) => {
+  const listId = Number(req.params.listId);
+  if (!Number.isInteger(listId) || listId < 1) return res.status(400).json({ error: "Invalid wishlist section ID." });
+  try {
+    const [result] = await db.query(
+      "DELETE FROM wishlist_lists WHERE id=? AND user_id=?",
+      [listId, req.authUser.id],
+    );
+    if (!result.affectedRows) return res.status(404).json({ error: "Wishlist section not found." });
+    return res.json({ message: "Wishlist section deleted." });
+  } catch (error) {
+    console.error("Delete wishlist section:", error.message);
+    return res.status(500).json({ error: "Could not delete this wishlist section." });
+  }
+});
+
 app.post("/api/account/wishlist/:dishId", requireAuth, async (req, res) => {
   const dishId = Number(req.params.dishId);
   if (!Number.isInteger(dishId) || dishId < 1) return res.status(400).json({ error: "Invalid dish ID." });
+  const requestedListId = req.body?.listId === undefined ? null : Number(req.body.listId);
+  if (requestedListId !== null && (!Number.isInteger(requestedListId) || requestedListId < 1)) {
+    return res.status(400).json({ error: "Invalid wishlist section ID." });
+  }
   try {
     const [dishes] = await db.query("SELECT id FROM menu_dishes WHERE id=?", [dishId]);
     if (!dishes.length) return res.status(404).json({ error: "Dish not found." });
-    await db.query("INSERT IGNORE INTO wishlist_items (user_id,dish_id) VALUES (?,?)", [req.authUser.id,dishId]);
+    const listId = requestedListId ?? await ensureDefaultWishlist(req.authUser.id);
+    const [lists] = await db.query(
+      "SELECT id FROM wishlist_lists WHERE id=? AND user_id=?",
+      [listId, req.authUser.id],
+    );
+    if (!lists.length) return res.status(404).json({ error: "Wishlist section not found." });
+    await db.query(
+      "INSERT IGNORE INTO wishlist_items (user_id,dish_id,list_id) VALUES (?,?,?)",
+      [req.authUser.id, dishId, listId],
+    );
     return res.status(201).json({ message: "Added to your wishlist." });
   } catch (error) {
     console.error("Add wishlist item:", error.message);
@@ -446,9 +564,24 @@ app.post("/api/account/wishlist/:dishId", requireAuth, async (req, res) => {
 app.delete("/api/account/wishlist/:dishId", requireAuth, async (req, res) => {
   const dishId = Number(req.params.dishId);
   if (!Number.isInteger(dishId) || dishId < 1) return res.status(400).json({ error: "Invalid dish ID." });
+  const requestedListId = req.query.listId === undefined ? null : Number(req.query.listId);
+  if (requestedListId !== null && (!Number.isInteger(requestedListId) || requestedListId < 1)) {
+    return res.status(400).json({ error: "Invalid wishlist section ID." });
+  }
   try {
-    await db.query("DELETE FROM wishlist_items WHERE user_id=? AND dish_id=?", [req.authUser.id,dishId]);
-    return res.json({ message: "Removed from your wishlist." });
+    if (requestedListId === null) {
+      await db.query("DELETE FROM wishlist_items WHERE user_id=? AND dish_id=?", [req.authUser.id, dishId]);
+    } else {
+      await db.query(
+        "DELETE FROM wishlist_items WHERE user_id=? AND dish_id=? AND list_id=?",
+        [req.authUser.id, dishId, requestedListId],
+      );
+    }
+    const [remaining] = await db.query(
+      "SELECT 1 FROM wishlist_items WHERE user_id=? AND dish_id=? LIMIT 1",
+      [req.authUser.id, dishId],
+    );
+    return res.json({ message: "Removed from your wishlist.", saved: remaining.length > 0 });
   } catch (error) {
     console.error("Remove wishlist item:", error.message);
     return res.status(500).json({ error: "Could not update your wishlist." });
@@ -458,9 +591,12 @@ app.delete("/api/account/wishlist/:dishId", requireAuth, async (req, res) => {
 app.get("/api/account/orders", requireAuth, async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT o.id,o.customer_name AS customerName,o.phone,o.address,o.original_total AS originalTotal,
+      `SELECT o.id,o.customer_name AS customerName,o.phone,o.address,
+       o.delivery_city AS deliveryCity,o.delivery_state AS deliveryState,o.delivery_postal_code AS deliveryPostalCode,
+       o.original_total AS originalTotal,
        o.item_discount AS itemDiscount,o.subtotal,o.extra_discount AS extraDiscount,o.total,o.status,o.created_at AS createdAt,
-       COALESCE(JSON_ARRAYAGG(JSON_OBJECT('dishName',oi.dish_name,'quantity',oi.quantity,'lineTotal',oi.line_total)),JSON_ARRAY()) AS items
+       COALESCE(JSON_ARRAYAGG(JSON_OBJECT('dishName',oi.dish_name,'quantity',oi.quantity,
+         'lineTotal',oi.line_total,'offerTitle',oi.offer_title,'offerDiscount',oi.offer_discount)),JSON_ARRAY()) AS items
        FROM orders o LEFT JOIN order_items oi ON oi.order_id=o.id
        WHERE o.user_id=? GROUP BY o.id ORDER BY o.created_at DESC`,
       [req.authUser.id],
@@ -519,12 +655,401 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
+function publicOffer(offer) {
+  if (!offer) return null;
+  return {
+    id: Number(offer.id),
+    title: offer.title,
+    description: offer.description,
+    type: offer.offer_type,
+    value: Number(offer.discount_value),
+    showOnApp: Boolean(offer.show_on_app),
+  };
+}
+
+async function applicableOffers(queryable, dishIds, lockRows = false) {
+  if (!dishIds.length) return new Map();
+  const [rows] = await queryable.query(`SELECT d.id AS dish_id,o.id,o.title,o.description,
+      o.offer_type,o.discount_value,o.show_on_app
+    FROM menu_dishes d
+    JOIN special_offers o ON o.is_active=1
+    LEFT JOIN special_offer_dishes od ON od.offer_id=o.id AND od.dish_id=d.id
+    WHERE d.id IN (?) AND (o.applies_to_all=1 OR od.dish_id IS NOT NULL)
+    ORDER BY o.created_at DESC,o.id DESC${lockRows ? " FOR UPDATE" : ""}`, [dishIds]);
+  const offers = new Map();
+  for (const row of rows) {
+    if (!offers.has(Number(row.dish_id))) offers.set(Number(row.dish_id), publicOffer(row));
+  }
+  return offers;
+}
+
 app.get("/api/foods", async (_req, res) => {
   try {
     const [rows] = await db.query(`SELECT id, name, category, price, old_price AS oldPrice,
-      description, image, tag, prep_time AS time FROM menu_dishes ORDER BY id`);
-    res.json(rows.map(d => ({ ...d, price: Number(d.price), oldPrice: Number(d.oldPrice) })));
-  } catch (e) { console.error("Get menu:", e); res.status(500).json({ error: "Failed to fetch menu" }); }
+      description, image, tag, prep_time AS time,is_featured AS isFeatured FROM menu_dishes ORDER BY id`);
+    const [media] = rows.length
+      ? await db.query(`SELECT id,dish_id AS dishId,media_type AS type,file_path AS path,mime_type AS mimeType
+        FROM menu_dish_media WHERE dish_id IN (?) ORDER BY display_order,id`, [rows.map((dish) => dish.id)])
+      : [[]];
+    const mediaByDish = new Map();
+    for (const item of media) {
+      const gallery = mediaByDish.get(Number(item.dishId)) || [];
+      gallery.push({ id: Number(item.id), type: item.type, path: item.path, mimeType: item.mimeType });
+      mediaByDish.set(Number(item.dishId), gallery);
+    }
+    const offers = await applicableOffers(db, rows.map((dish) => Number(dish.id)));
+    res.json(rows.map((dish) => {
+      const offer = offers.get(Number(dish.id)) || null;
+      return {
+        ...dish,
+        gallery: mediaByDish.get(Number(dish.id)) || [],
+        price: Number(dish.price),
+        oldPrice: Number(dish.oldPrice),
+        isFeatured: Boolean(dish.isFeatured),
+        isRecommended: Boolean(dish.isFeatured),
+        offer,
+        buyOneGetOne: offer?.type === "bogo",
+      };
+    }));
+  } catch (error) {
+    console.error("Get menu:", error);
+    res.status(500).json({ error: "Failed to fetch menu" });
+  }
+});
+
+async function fetchBundles(queryable, publicOnly = false) {
+  const [bundles] = await queryable.query(`SELECT id,title,description,bundle_price AS bundlePrice,
+      is_active AS isActive,show_on_app AS showOnApp
+    FROM special_bundles ${publicOnly ? "WHERE is_active=1 AND show_on_app=1" : ""}
+    ORDER BY created_at DESC,id DESC`);
+  if (!bundles.length) return [];
+  const [items] = await queryable.query(`SELECT bd.bundle_id AS bundleId,md.id,md.name,md.image,
+      md.price,md.old_price AS oldPrice,bd.quantity
+    FROM special_bundle_dishes bd
+    JOIN menu_dishes md ON md.id=bd.dish_id
+    WHERE bd.bundle_id IN (?)
+    ORDER BY md.name`, [bundles.map((bundle) => bundle.id)]);
+  const itemsByBundle = new Map();
+  for (const item of items) {
+    const list = itemsByBundle.get(Number(item.bundleId)) || [];
+    list.push({
+      id: Number(item.id),
+      name: item.name,
+      image: item.image,
+      price: Number(item.price),
+      oldPrice: Number(item.oldPrice),
+      quantity: Number(item.quantity),
+    });
+    itemsByBundle.set(Number(item.bundleId), list);
+  }
+  return bundles.map((bundle) => {
+    const bundleItems = itemsByBundle.get(Number(bundle.id)) || [];
+    const regularPriceCents = bundleItems.reduce(
+      (sum, item) => sum + Math.round(item.price * 100) * item.quantity,
+      0,
+    );
+    const originalPriceCents = bundleItems.reduce(
+      (sum, item) => sum + Math.round(item.oldPrice * 100) * item.quantity,
+      0,
+    );
+    return {
+      id: Number(bundle.id),
+      title: bundle.title,
+      description: bundle.description,
+      price: Number(bundle.bundlePrice),
+      regularPrice: regularPriceCents / 100,
+      originalPrice: originalPriceCents / 100,
+      image: bundleItems[0]?.image || "",
+      isActive: Boolean(bundle.isActive),
+      showOnApp: Boolean(bundle.showOnApp),
+      items: bundleItems,
+    };
+  });
+}
+
+app.get("/api/bundles", async (_req, res) => {
+  try {
+    res.json(await fetchBundles(db, true));
+  } catch (error) {
+    console.error("Get storefront bundles:", error);
+    res.status(500).json({ error: "Failed to fetch bundles." });
+  }
+});
+
+function parseBundle(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  const description = typeof body.description === "string" ? body.description.trim() : "";
+  const price = Number(body.price);
+  const isActive = body.isActive;
+  const showOnApp = body.showOnApp;
+  if (!title || title.length > 100 || description.length > 250 ||
+      !Number.isFinite(price) || price <= 0 || price > 99999999.99 ||
+      typeof isActive !== "boolean" || typeof showOnApp !== "boolean" ||
+      !Array.isArray(body.items) || body.items.length < 2 || body.items.length > 50) return null;
+  const quantities = new Map();
+  for (const item of body.items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const id = Number(item.id), quantity = Number(item.quantity);
+    if (!Number.isInteger(id) || id < 1 || !Number.isInteger(quantity) || quantity < 1 || quantity > 20) return null;
+    quantities.set(id, (quantities.get(id) || 0) + quantity);
+  }
+  if (quantities.size < 2 || [...quantities.values()].some((quantity) => quantity > 20)) return null;
+  return {
+    title,
+    description,
+    price,
+    isActive,
+    showOnApp,
+    items: [...quantities].map(([id, quantity]) => ({ id, quantity })),
+  };
+}
+
+app.get("/api/admin/bundles", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    res.json(await fetchBundles(db));
+  } catch (error) {
+    console.error("Get admin bundles:", error);
+    res.status(500).json({ error: "Failed to fetch bundles." });
+  }
+});
+
+async function saveBundle(req, res, bundleId = null) {
+  const bundle = parseBundle(req.body);
+  if (!bundle) {
+    return res.status(400).json({ error: "Enter a title, price, and at least two different menu dishes with valid quantities." });
+  }
+  if (bundleId !== null && (!Number.isInteger(bundleId) || bundleId < 1)) {
+    return res.status(400).json({ error: "Invalid bundle ID." });
+  }
+
+  let conn;
+  try {
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+    if (bundleId !== null) {
+      const [existing] = await conn.query("SELECT id FROM special_bundles WHERE id=? FOR UPDATE", [bundleId]);
+      if (!existing.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: "Bundle not found." });
+      }
+    }
+    const dishIds = bundle.items.map((item) => item.id);
+    const [dishes] = await conn.query(
+      "SELECT id,price FROM menu_dishes WHERE id IN (?) FOR UPDATE",
+      [dishIds],
+    );
+    if (dishes.length !== dishIds.length) {
+      await conn.rollback();
+      return res.status(400).json({ error: "One or more selected dishes no longer exist. Refresh the menu and try again." });
+    }
+    const prices = new Map(dishes.map((dish) => [Number(dish.id), Math.round(Number(dish.price) * 100)]));
+    const regularPriceCents = bundle.items.reduce(
+      (sum, item) => sum + prices.get(item.id) * item.quantity,
+      0,
+    );
+    const bundlePriceCents = Math.round(bundle.price * 100);
+    if (bundlePriceCents > regularPriceCents) {
+      await conn.rollback();
+      return res.status(400).json({ error: "Bundle price cannot be higher than the combined menu price of its dishes." });
+    }
+
+    let id = bundleId;
+    if (id === null) {
+      const [result] = await conn.query(`INSERT INTO special_bundles
+        (title,description,bundle_price,is_active,show_on_app) VALUES (?,?,?,?,?)`,
+      [bundle.title,bundle.description,bundlePriceCents / 100,bundle.isActive,bundle.showOnApp]);
+      id = result.insertId;
+    } else {
+      await conn.query(`UPDATE special_bundles SET title=?,description=?,bundle_price=?,
+        is_active=?,show_on_app=? WHERE id=?`,
+      [bundle.title,bundle.description,bundlePriceCents / 100,bundle.isActive,bundle.showOnApp,id]);
+      await conn.query("DELETE FROM special_bundle_dishes WHERE bundle_id=?", [id]);
+    }
+    await conn.query("INSERT INTO special_bundle_dishes (bundle_id,dish_id,quantity) VALUES ?", [
+      bundle.items.map((item) => [id,item.id,item.quantity]),
+    ]);
+    await conn.commit();
+    res.status(bundleId === null ? 201 : 200).json({ id });
+  } catch (error) {
+    if (conn) {
+      try { await conn.rollback(); }
+      catch (rollbackError) { console.error("Bundle rollback failed:", rollbackError); }
+    }
+    console.error("Save bundle:", error);
+    res.status(500).json({ error: "Failed to save bundle." });
+  } finally {
+    conn?.release();
+  }
+}
+
+app.post("/api/admin/bundles", requireAuth, requireAdmin, (req, res) => saveBundle(req, res));
+app.put("/api/admin/bundles/:id", requireAuth, requireAdmin, (req, res) =>
+  saveBundle(req, res, Number(req.params.id)));
+app.delete("/api/admin/bundles/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: "Invalid bundle ID." });
+  try {
+    const [result] = await db.query("DELETE FROM special_bundles WHERE id=?", [id]);
+    if (!result.affectedRows) return res.status(404).json({ error: "Bundle not found." });
+    res.json({ message: "Bundle deleted." });
+  } catch (error) {
+    console.error("Delete bundle:", error);
+    res.status(500).json({ error: "Failed to delete bundle." });
+  }
+});
+
+function parseOffer(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  const description = typeof body.description === "string" ? body.description.trim() : "";
+  const type = body.type;
+  const value = Number(body.value);
+  const appliesToAll = body.appliesToAll;
+  const isActive = body.isActive;
+  const showOnApp = body.showOnApp;
+  const dishIds = body.dishIds;
+  if (!title || title.length > 100 || description.length > 250 ||
+      !["bogo", "percent", "fixed"].includes(type) ||
+      !Number.isFinite(value) || value < 0 || value > 99999999.99 ||
+      (type === "bogo" ? value !== 0 : value <= 0) ||
+      (type === "percent" && value > 100) ||
+      typeof appliesToAll !== "boolean" || typeof isActive !== "boolean" ||
+      typeof showOnApp !== "boolean" ||
+      !Array.isArray(dishIds)) return null;
+  const ids = [...new Set(dishIds.map(Number))];
+  if (ids.some((id) => !Number.isInteger(id) || id < 1) ||
+      (!appliesToAll && ids.length === 0)) return null;
+  return { title, description, type, value, appliesToAll, isActive, showOnApp, dishIds: appliesToAll ? [] : ids };
+}
+
+app.get("/api/admin/offers", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const [offers] = await db.query(`SELECT id,title,description,offer_type AS type,
+      discount_value AS value,applies_to_all AS appliesToAll,is_active AS isActive,
+      show_on_app AS showOnApp,created_at AS createdAt FROM special_offers ORDER BY created_at DESC,id DESC`);
+    const [targets] = await db.query(`SELECT od.offer_id AS offerId,md.id AS dishId,md.name AS dishName
+      FROM special_offer_dishes od JOIN menu_dishes md ON md.id=od.dish_id
+      ORDER BY md.name`);
+    const targetsByOffer = new Map();
+    for (const target of targets) {
+      const list = targetsByOffer.get(Number(target.offerId)) || [];
+      list.push({ id: Number(target.dishId), name: target.dishName });
+      targetsByOffer.set(Number(target.offerId), list);
+    }
+    res.json(offers.map((offer) => ({
+      ...offer,
+      id: Number(offer.id),
+      value: Number(offer.value),
+      appliesToAll: Boolean(offer.appliesToAll),
+      isActive: Boolean(offer.isActive),
+      showOnApp: Boolean(offer.showOnApp),
+      dishes: targetsByOffer.get(Number(offer.id)) || [],
+    })));
+  } catch (error) {
+    console.error("Get admin offers:", error);
+    res.status(500).json({ error: "Failed to fetch offers." });
+  }
+});
+
+async function saveOffer(req, res, offerId = null) {
+  const offer = parseOffer(req.body);
+  if (!offer) return res.status(400).json({ error: "Enter a title, valid offer type and value, and at least one dish or all dishes." });
+  if (offerId !== null && (!Number.isInteger(offerId) || offerId < 1)) {
+    return res.status(400).json({ error: "Invalid offer ID." });
+  }
+
+  let conn;
+  try {
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+    if (offerId !== null) {
+      const [existing] = await conn.query("SELECT id FROM special_offers WHERE id=? FOR UPDATE", [offerId]);
+      if (!existing.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: "Offer not found." });
+      }
+    }
+
+    if (!offer.appliesToAll) {
+      const [dishes] = await conn.query("SELECT id FROM menu_dishes WHERE id IN (?)", [offer.dishIds]);
+      if (dishes.length !== offer.dishIds.length) {
+        await conn.rollback();
+        return res.status(400).json({ error: "One or more selected dishes no longer exist. Refresh the menu and try again." });
+      }
+    }
+
+    let conflicts = [];
+    if (offer.isActive) {
+      if (offer.appliesToAll) {
+        const [rows] = await conn.query(`SELECT id,title FROM special_offers
+          WHERE is_active=1 AND id<>? FOR UPDATE`, [offerId || 0]);
+        conflicts = rows;
+      } else {
+        const [rows] = await conn.query(`SELECT o.id,o.title FROM special_offers o
+          WHERE o.is_active=1 AND o.id<>? AND (
+            o.applies_to_all=1 OR EXISTS (
+              SELECT 1 FROM special_offer_dishes od
+              WHERE od.offer_id=o.id AND od.dish_id IN (?)
+            )
+          ) FOR UPDATE`, [offerId || 0, offer.dishIds]);
+        conflicts = rows;
+      }
+      if (conflicts.length) {
+        await conn.query("UPDATE special_offers SET is_active=0 WHERE id IN (?)", [conflicts.map((item) => item.id)]);
+      }
+    }
+
+    let id = offerId;
+    if (id === null) {
+      const [result] = await conn.query(`INSERT INTO special_offers
+        (title,description,offer_type,discount_value,applies_to_all,is_active,show_on_app)
+        VALUES (?,?,?,?,?,?,?)`,
+      [offer.title,offer.description,offer.type,offer.value,offer.appliesToAll,offer.isActive,offer.showOnApp]);
+      id = result.insertId;
+    } else {
+      await conn.query(`UPDATE special_offers SET title=?,description=?,offer_type=?,discount_value=?,
+        applies_to_all=?,is_active=?,show_on_app=? WHERE id=?`,
+      [offer.title,offer.description,offer.type,offer.value,offer.appliesToAll,offer.isActive,offer.showOnApp,id]);
+      await conn.query("DELETE FROM special_offer_dishes WHERE offer_id=?", [id]);
+    }
+    if (!offer.appliesToAll) {
+      await conn.query("INSERT INTO special_offer_dishes (offer_id,dish_id) VALUES ?", [
+        offer.dishIds.map((dishId) => [id,dishId]),
+      ]);
+    }
+    await conn.commit();
+    res.status(offerId === null ? 201 : 200).json({
+      id,
+      replacedOffers: conflicts.map((item) => item.title),
+    });
+  } catch (error) {
+    if (conn) {
+      try { await conn.rollback(); }
+      catch (rollbackError) { console.error("Offer rollback failed:", rollbackError); }
+    }
+    console.error("Save offer:", error);
+    res.status(500).json({ error: "Failed to save offer." });
+  } finally {
+    conn?.release();
+  }
+}
+
+app.post("/api/admin/offers", requireAuth, requireAdmin, (req, res) => saveOffer(req, res));
+app.put("/api/admin/offers/:id", requireAuth, requireAdmin, (req, res) =>
+  saveOffer(req, res, Number(req.params.id)));
+
+app.delete("/api/admin/offers/:id", requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: "Invalid offer ID." });
+  try {
+    const [result] = await db.query("DELETE FROM special_offers WHERE id=?", [id]);
+    if (!result.affectedRows) return res.status(404).json({ error: "Offer not found." });
+    res.json({ message: "Offer deleted." });
+  } catch (error) {
+    console.error("Delete offer:", error);
+    res.status(500).json({ error: "Failed to delete offer." });
+  }
 });
 
 function detectImageFormat(buffer) {
@@ -537,6 +1062,22 @@ function detectImageFormat(buffer) {
   if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" &&
       buffer.toString("ascii", 8, 12) === "WEBP") {
     return { mime: "image/webp", extension: "webp" };
+  }
+  return null;
+}
+
+function detectGalleryMedia(buffer, contentType) {
+  const image = detectImageFormat(buffer);
+  if (image && image.mime === contentType) {
+    return { ...image, type: "image" };
+  }
+  if (contentType === "video/mp4" && buffer.length >= 12 &&
+      buffer.toString("ascii", 4, 8) === "ftyp") {
+    return { mime: "video/mp4", extension: "mp4", type: "video" };
+  }
+  if (contentType === "video/webm" && buffer.length >= 4 &&
+      buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+    return { mime: "video/webm", extension: "webm", type: "video" };
   }
   return null;
 }
@@ -569,6 +1110,119 @@ app.post(
   },
 );
 
+app.post(
+  "/api/foods/:id/gallery",
+  requireAuth,
+  requireAdmin,
+  express.raw({ type: ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"], limit: "50mb" }),
+  async (req, res) => {
+    const dishId = Number(req.params.id);
+    if (!Number.isInteger(dishId) || dishId < 1) {
+      return res.status(400).json({ error: "Invalid dish ID." });
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(415).json({ error: "Choose a JPEG, PNG, WebP, MP4, or WebM file to upload." });
+    }
+
+    const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+    const format = detectGalleryMedia(req.body, contentType);
+    if (!format) {
+      return res.status(415).json({ error: "The file contents do not match a supported JPEG, PNG, WebP, MP4, or WebM format." });
+    }
+    if (format.type === "image" && req.body.length > 5 * 1024 * 1024) {
+      return res.status(413).json({ error: "Gallery images must be 5 MB or smaller." });
+    }
+
+    let conn;
+    let uploadedPath = "";
+    try {
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      const [dishes] = await conn.query("SELECT id FROM menu_dishes WHERE id=? FOR UPDATE", [dishId]);
+      if (!dishes.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: "Dish not found." });
+      }
+      const [counts] = await conn.query(`SELECT
+        SUM(media_type='image') AS imageCount,SUM(media_type='video') AS videoCount
+        FROM menu_dish_media WHERE dish_id=?`, [dishId]);
+      if (format.type === "image" && Number(counts[0].imageCount || 0) >= 10) {
+        await conn.rollback();
+        return res.status(409).json({ error: "A dish can have up to 10 gallery images." });
+      }
+      if (format.type === "video" && Number(counts[0].videoCount || 0) >= 1) {
+        await conn.rollback();
+        return res.status(409).json({ error: "This dish already has a gallery video. Remove it before adding a replacement." });
+      }
+
+      const filename = `${randomUUID()}.${format.extension}`;
+      uploadedPath = path.join(uploadsDir, filename);
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(uploadedPath, req.body, { flag: "wx" });
+      const publicPath = `/uploads/${filename}`;
+      const [result] = await conn.query(`INSERT INTO menu_dish_media
+        (dish_id,media_type,file_path,mime_type,display_order) VALUES (?,?,?,?,?)`,
+      [dishId,format.type,publicPath,format.mime,Number(counts[0].imageCount || 0) + Number(counts[0].videoCount || 0)]);
+      await conn.commit();
+      return res.status(201).json({
+        id: Number(result.insertId),
+        dishId,
+        type: format.type,
+        path: publicPath,
+        mimeType: format.mime,
+      });
+    } catch (error) {
+      if (conn) {
+        try { await conn.rollback(); }
+        catch (rollbackError) { console.error("Food gallery upload rollback failed:", rollbackError); }
+      }
+      if (uploadedPath) {
+        try { await unlink(uploadedPath); }
+        catch (cleanupError) {
+          if (cleanupError.code !== "ENOENT") console.error("Remove failed food gallery upload:", cleanupError);
+        }
+      }
+      console.error("Upload food gallery media:", error);
+      return res.status(500).json({ error: "Failed to save gallery media." });
+    } finally {
+      conn?.release();
+    }
+  },
+);
+
+app.delete("/api/foods/:dishId/gallery/:mediaId", requireAuth, requireAdmin, async (req, res) => {
+  const dishId = Number(req.params.dishId);
+  const mediaId = Number(req.params.mediaId);
+  if (!Number.isInteger(dishId) || dishId < 1 || !Number.isInteger(mediaId) || mediaId < 1) {
+    return res.status(400).json({ error: "Invalid dish or gallery item ID." });
+  }
+  try {
+    const [rows] = await db.query(
+      "SELECT file_path AS filePath FROM menu_dish_media WHERE id=? AND dish_id=?",
+      [mediaId,dishId],
+    );
+    if (!rows.length) return res.status(404).json({ error: "Gallery item not found." });
+    await db.query("DELETE FROM menu_dish_media WHERE id=? AND dish_id=?", [mediaId,dishId]);
+    const filename = path.basename(rows[0].filePath);
+    if (!/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(jpg|png|webp|mp4|webm)$/i.test(filename)) {
+      console.error("Food gallery item has an unexpected upload path:", rows[0].filePath);
+      return res.status(500).json({ error: "Gallery item was removed, but its stored file could not be safely identified." });
+    }
+    try {
+      await unlink(path.join(uploadsDir, filename));
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.error("Delete food gallery file:", error);
+        return res.status(500).json({ error: "Gallery item was removed, but its stored file could not be deleted." });
+      }
+    }
+    return res.json({ message: "Gallery item deleted." });
+  } catch (error) {
+    console.error("Delete food gallery media:", error);
+    return res.status(500).json({ error: "Failed to delete gallery item." });
+  }
+});
+
 function parseDish(b) {
   if (!b || typeof b !== "object" || Array.isArray(b)) return null;
   const name = typeof b.name === "string" ? b.name.trim() : "";
@@ -582,7 +1236,8 @@ function parseDish(b) {
       String(b.tag || "").length > 100 ||
       String(b.time || "").length > 50) return null;
   return { name, category, price, oldPrice, image, description: String(b.description || "").trim(),
-    tag: String(b.tag || "").trim(), time: String(b.time || "").trim() };
+    tag: String(b.tag || "").trim(), time: String(b.time || "").trim(),
+    isFeatured: b.isFeatured === true };
 }
 
 app.post("/api/foods", requireAuth, requireAdmin, async (req, res) => {
@@ -590,8 +1245,8 @@ app.post("/api/foods", requireAuth, requireAdmin, async (req, res) => {
   if (!d) return res.status(400).json({ error: "Enter valid dish details and prices." });
   try {
     const [r] = await db.query(`INSERT INTO menu_dishes
-      (name,category,price,old_price,description,image,tag,prep_time) VALUES (?,?,?,?,?,?,?,?)`,
-      [d.name,d.category,d.price,d.oldPrice,d.description,d.image,d.tag,d.time]);
+      (name,category,price,old_price,description,image,tag,prep_time,is_featured) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [d.name,d.category,d.price,d.oldPrice,d.description,d.image,d.tag,d.time,d.isFeatured]);
     res.status(201).json({ message: "Dish added", id: r.insertId });
   } catch (error) { console.error("Add dish:", error); res.status(500).json({ error: "Failed to add dish" }); }
 });
@@ -601,8 +1256,8 @@ app.put("/api/foods/:id", requireAuth, requireAdmin, async (req, res) => {
   if (!Number.isInteger(id) || id < 1 || !d) return res.status(400).json({ error: "Invalid dish details." });
   try {
     const [r] = await db.query(`UPDATE menu_dishes SET name=?,category=?,price=?,old_price=?,
-      description=?,image=?,tag=?,prep_time=? WHERE id=?`,
-      [d.name,d.category,d.price,d.oldPrice,d.description,d.image,d.tag,d.time,id]);
+      description=?,image=?,tag=?,prep_time=?,is_featured=? WHERE id=?`,
+      [d.name,d.category,d.price,d.oldPrice,d.description,d.image,d.tag,d.time,d.isFeatured,id]);
     if (!r.affectedRows) return res.status(404).json({ error: "Dish not found" });
     res.json({ message: "Dish updated" });
   } catch (error) { console.error("Update dish:", error); res.status(500).json({ error: "Failed to update dish" }); }
@@ -612,8 +1267,29 @@ app.delete("/api/foods/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: "Invalid dish ID" });
   try {
+    const [media] = await db.query("SELECT file_path AS filePath FROM menu_dish_media WHERE dish_id=?", [id]);
     const [r] = await db.query("DELETE FROM menu_dishes WHERE id=?", [id]);
     if (!r.affectedRows) return res.status(404).json({ error: "Dish not found" });
+    let cleanupFailed = false;
+    for (const item of media) {
+      const filename = path.basename(item.filePath);
+      if (!/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(jpg|png|webp|mp4|webm)$/i.test(filename)) {
+        console.error("Food gallery item has an unexpected upload path:", item.filePath);
+        cleanupFailed = true;
+        continue;
+      }
+      try {
+        await unlink(path.join(uploadsDir, filename));
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          console.error("Delete gallery file for removed dish:", error);
+          cleanupFailed = true;
+        }
+      }
+    }
+    if (cleanupFailed) {
+      return res.status(500).json({ error: "Dish was deleted, but one or more gallery files could not be cleaned up." });
+    }
     res.json({ message: "Dish deleted" });
   } catch (error) { console.error("Delete dish:", error); res.status(500).json({ error: "Failed to delete dish" }); }
 });
@@ -623,10 +1299,19 @@ app.post("/api/orders", optionalAuth, async (req, res) => {
   const customerName = typeof body.customerName === "string" ? body.customerName.trim() : "";
   const phone = typeof body.phone === "string" ? body.phone.trim() : "";
   const address = typeof body.address === "string" ? body.address.trim() : "";
-  const items = body.items;
+  const location = body.deliveryLocation && typeof body.deliveryLocation === "object" &&
+      !Array.isArray(body.deliveryLocation) ? body.deliveryLocation : {};
+  const deliveryCity = typeof location.city === "string" ? location.city.trim() : "";
+  const deliveryState = typeof location.state === "string" ? location.state.trim() : "";
+  const deliveryPostalCode = typeof location.postalCode === "string" ? location.postalCode.trim() : "";
+  const items = Array.isArray(body.items) ? body.items : [];
+  const requestedBundles = Array.isArray(body.bundles) ? body.bundles : [];
   if (!customerName || customerName.length > 120 || !/^[+()\d\s-]{7,20}$/.test(phone) ||
-      !address || address.length > 1000 || !Array.isArray(items) || !items.length || items.length > 50)
-    return res.status(400).json({ error: "Enter valid name, phone, address, and at least one item." });
+      !address || address.length > 1000 ||
+      !deliveryCity || deliveryCity.length > 100 || !deliveryState || deliveryState.length > 100 ||
+      !deliveryPostalCode || deliveryPostalCode.length > 20 ||
+      (!items.length && !requestedBundles.length) || items.length + requestedBundles.length > 50)
+    return res.status(400).json({ error: "Enter valid name, phone, full address, city, state, postal code, and at least one item." });
 
   const qty = new Map();
   for (const item of items) {
@@ -640,31 +1325,132 @@ app.post("/api/orders", optionalAuth, async (req, res) => {
   }
   if ([...qty.values()].some(q => q > 99)) return res.status(400).json({ error: "Maximum quantity per dish is 99." });
 
+  const bundleQty = new Map();
+  for (const bundle of requestedBundles) {
+    if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) {
+      return res.status(400).json({ error: "Invalid bundle or quantity." });
+    }
+    const id = Number(bundle.id), quantity = Number(bundle.quantity);
+    if (!Number.isInteger(id) || id < 1 || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      return res.status(400).json({ error: "Invalid bundle or quantity." });
+    }
+    bundleQty.set(id, (bundleQty.get(id) || 0) + quantity);
+  }
+  if ([...bundleQty.values()].some(quantity => quantity > 99)) {
+    return res.status(400).json({ error: "Maximum quantity per bundle is 99." });
+  }
+
   let conn;
   try {
     conn = await db.getConnection();
     await conn.beginTransaction();
-    const ids = [...qty.keys()];
-    const [dishes] = await conn.query("SELECT id,name,price,old_price FROM menu_dishes WHERE id IN (?) FOR UPDATE", [ids]);
+    const bundleIds = [...bundleQty.keys()];
+    let selectedBundles = [];
+    let bundleComponents = [];
+    if (bundleIds.length) {
+      const [rows] = await conn.query(
+        "SELECT id,title,bundle_price AS bundlePrice FROM special_bundles WHERE id IN (?) AND is_active=1 AND show_on_app=1 FOR UPDATE",
+        [bundleIds],
+      );
+      selectedBundles = rows;
+      if (selectedBundles.length !== bundleIds.length) {
+        await conn.rollback();
+        return res.status(400).json({ error: "One or more bundles are unavailable. Refresh the menu." });
+      }
+      const [components] = await conn.query(
+        "SELECT bundle_id AS bundleId,dish_id AS dishId,quantity FROM special_bundle_dishes WHERE bundle_id IN (?)",
+        [bundleIds],
+      );
+      bundleComponents = components;
+      const componentCounts = new Map();
+      for (const component of components) {
+        componentCounts.set(Number(component.bundleId), (componentCounts.get(Number(component.bundleId)) || 0) + 1);
+      }
+      if (bundleIds.some(id => (componentCounts.get(id) || 0) < 2)) {
+        await conn.rollback();
+        return res.status(400).json({ error: "A selected bundle is no longer available. Refresh the menu." });
+      }
+    }
+    const ids = [...new Set([
+      ...qty.keys(),
+      ...bundleComponents.map(component => Number(component.dishId)),
+    ])];
+    const [dishes] = await conn.query(
+      "SELECT id,name,category,tag,price,old_price FROM menu_dishes WHERE id IN (?) FOR UPDATE",
+      [ids],
+    );
     if (dishes.length !== ids.length) {
       await conn.rollback();
       return res.status(400).json({ error: "One or more dishes are unavailable. Refresh the menu." });
     }
+    const dishById = new Map(dishes.map(dish => [Number(dish.id), dish]));
+    const regularDishIds = [...qty.keys()];
+    const offers = await applicableOffers(conn, regularDishIds, true);
     let originalTotalCents = 0, subtotalCents = 0;
-    const lines = dishes.map(d => {
+    const lines = dishes.filter(dish => qty.has(Number(dish.id))).map(d => {
       const quantity = qty.get(d.id), price = Number(d.price), oldPrice = Number(d.old_price);
       const priceCents = Math.round(price * 100), oldPriceCents = Math.round(oldPrice * 100);
+      const offer = offers.get(Number(d.id));
+      let offerSavingsCents = 0;
+      let freeQuantity = 0;
+      if (offer?.type === "bogo") {
+        freeQuantity = Math.floor(quantity / 2);
+        offerSavingsCents = priceCents * freeQuantity;
+      } else if (offer?.type === "percent") {
+        offerSavingsCents = Math.min(priceCents, Math.round(priceCents * offer.value / 100)) * quantity;
+      } else if (offer?.type === "fixed") {
+        offerSavingsCents = Math.min(priceCents, Math.round(offer.value * 100)) * quantity;
+      }
       originalTotalCents += oldPriceCents * quantity;
-      subtotalCents += priceCents * quantity;
+      const lineTotalCents = priceCents * quantity - offerSavingsCents;
+      subtotalCents += lineTotalCents;
       return {
         id: d.id,
         name: d.name,
         price: priceCents / 100,
         oldPrice: oldPriceCents / 100,
         quantity,
-        lineTotal: (priceCents * quantity) / 100,
+        freeQuantity,
+        offerTitle: offer?.title || null,
+        offerDiscount: offerSavingsCents / 100,
+        lineTotal: lineTotalCents / 100,
       };
     });
+    for (const bundle of selectedBundles) {
+      const bundleId = Number(bundle.id);
+      const quantity = bundleQty.get(bundleId);
+      const components = bundleComponents.filter(component => Number(component.bundleId) === bundleId);
+      const regularPriceCents = components.reduce((sum, component) => {
+        const dish = dishById.get(Number(component.dishId));
+        return sum + Math.round(Number(dish.price) * 100) * Number(component.quantity);
+      }, 0);
+      const originalPriceCents = components.reduce((sum, component) => {
+        const dish = dishById.get(Number(component.dishId));
+        return sum + Math.round(Number(dish.old_price) * 100) * Number(component.quantity);
+      }, 0);
+      const priceCents = Math.round(Number(bundle.bundlePrice) * 100);
+      if (priceCents > regularPriceCents) {
+        await conn.rollback();
+        return res.status(409).json({
+          error: `The price of "${bundle.title}" is no longer valid. Please contact the restaurant.`,
+        });
+      }
+      const lineTotalCents = priceCents * quantity;
+      const bundleDiscountCents = Math.max(0, originalPriceCents - priceCents) * quantity;
+      originalTotalCents += originalPriceCents * quantity;
+      subtotalCents += lineTotalCents;
+      lines.push({
+        id: null,
+        name: bundle.title,
+        price: priceCents / 100,
+        oldPrice: originalPriceCents / 100,
+        quantity,
+        freeQuantity: 0,
+        offerTitle: "Bundle",
+        offerDiscount: bundleDiscountCents / 100,
+        lineTotal: lineTotalCents / 100,
+      });
+    }
     if (originalTotalCents > 9999999999 || subtotalCents > 9999999999) {
       await conn.rollback();
       return res.status(400).json({ error: "The order total exceeds the supported amount." });
@@ -678,14 +1464,17 @@ app.post("/api/orders", optionalAuth, async (req, res) => {
     const extraDiscount = extraDiscountCents / 100;
     const total = totalCents / 100;
     const [order] = await conn.query(`INSERT INTO orders
-      (user_id,customer_name,phone,address,original_total,item_discount,subtotal,extra_discount,total)
-      VALUES (?,?,?,?,?,?,?,?,?)`,
-      [req.authUser?.id || null,customerName,phone,address,originalTotal,itemDiscount,subtotal,extraDiscount,total]);
+      (user_id,customer_name,phone,address,delivery_city,delivery_state,delivery_postal_code,
+       original_total,item_discount,subtotal,extra_discount,total)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [req.authUser?.id || null,customerName,phone,address,
+        deliveryCity || null,deliveryState || null,deliveryPostalCode || null,
+        originalTotal,itemDiscount,subtotal,extraDiscount,total]);
     for (const line of lines) {
       await conn.query(`INSERT INTO order_items
-        (order_id,dish_id,dish_name,unit_price,original_price,quantity,line_total)
-        VALUES (?,?,?,?,?,?,?)`,
-        [order.insertId,line.id,line.name,line.price,line.oldPrice,line.quantity,line.lineTotal]);
+        (order_id,dish_id,dish_name,unit_price,original_price,quantity,line_total,offer_title,offer_discount)
+        VALUES (?,?,?,?,?,?,?,?,?)`,
+      [order.insertId,line.id,line.name,line.price,line.oldPrice,line.quantity,line.lineTotal,line.offerTitle,line.offerDiscount]);
     }
     await conn.commit();
     res.status(201).json({ message: "Order saved successfully", orderId: order.insertId,
@@ -705,6 +1494,7 @@ app.post("/api/orders", optionalAuth, async (req, res) => {
 app.get("/api/orders", requireAuth, requireAdmin, async (_req, res) => {
   try {
     const [rows] = await db.query(`SELECT id,customer_name AS customerName,phone,address,
+      delivery_city AS deliveryCity,delivery_state AS deliveryState,delivery_postal_code AS deliveryPostalCode,
       original_total AS originalTotal,item_discount AS itemDiscount,subtotal,
       extra_discount AS extraDiscount,total,status,created_at AS createdAt FROM orders ORDER BY id DESC`);
     res.json(rows.map(o => ({ ...o, originalTotal:Number(o.originalTotal), itemDiscount:Number(o.itemDiscount),
@@ -741,11 +1531,17 @@ app.use((_req, res) => {
   res.status(404).json({ error: "API endpoint not found" });
 });
 
-app.use((error, _req, res, _next) => {
+app.use((error, req, res, _next) => {
   if (error.type === "entity.parse.failed") {
     return res.status(400).json({ error: "Invalid JSON request body." });
   }
   if (error.type === "entity.too.large") {
+    if (req.path.includes("/gallery")) {
+      if (String(req.headers["content-type"] || "").startsWith("image/")) {
+        return res.status(413).json({ error: "Gallery images must be 5 MB or smaller." });
+      }
+      return res.status(413).json({ error: "Gallery videos must be 50 MB or smaller." });
+    }
     return res.status(413).json({ error: "The uploaded image must be 5 MB or smaller." });
   }
   if (error.message === "Origin not allowed by CORS") {

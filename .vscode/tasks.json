@@ -14,10 +14,9 @@
 		{
 			"label": "Restart FoodieExpress API process",
 			"type": "shell",
-			"command": "Stop-Process",
+			"command": "node",
 			"args": [
-				"-Id",
-				"16668"
+				"server/restart-api-listener.js"
 			],
 			"isBackground": false,
 			"problemMatcher": []
@@ -40,6 +39,28 @@
 			"args": [
 				"run",
 				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Migrate FoodieExpress special offers",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"db:migrate:offers"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Test FoodieExpress special offers",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"test:offers"
 			],
 			"isBackground": false,
 			"problemMatcher": []
@@ -414,8 +435,7 @@
 			"type": "shell",
 			"command": "node",
 			"args": [
-				"-e",
-				"fetch('http://localhost:5000/api/health').then(async r => { const body = await r.json(); console.log(JSON.stringify({status:r.status, database:body.database?.connected})); if (!r.ok || !body.database?.connected) process.exitCode=1; })"
+				"server/check-api-health.js"
 			],
 			"isBackground": false,
 			"problemMatcher": []
@@ -425,7 +445,7 @@
 			"type": "shell",
 			"command": "node",
 			"args": [
-				"server/inspect-api-listener.js"
+				"server/find-api-listener.js"
 			],
 			"isBackground": false,
 			"problemMatcher": []
@@ -514,6 +534,27 @@
 			"type": "shell",
 			"command": "npm run test:account",
 			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Migrate FoodieExpress delivery locations",
+			"type": "shell",
+			"command": "npm run db:migrate:locations",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Migrate FoodieExpress food gallery",
+			"type": "shell",
+			"command": "npm run db:migrate:gallery",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run FoodieExpress frontend",
+			"type": "shell",
+			"command": "npm run frontend",
+			"isBackground": true,
 			"problemMatcher": []
 		}
 	]

@@ -139,8 +139,52 @@ try {
 
   const foods = await check("Menu endpoint", "/foods", undefined, 200, (data) => {
     assert.ok(Array.isArray(data) && data.length > 0);
+    for (const dish of data) {
+      assert.equal(typeof dish.isRecommended, "boolean");
+      assert.equal(typeof dish.buyOneGetOne, "boolean");
+    }
   });
   const dishId = foods[0].id;
+  const offerDish = foods.find((dish) => dish.buyOneGetOne);
+  if (offerDish) {
+    const offerOrder = await check("Buy-one-get-one order charges for one of a pair", "/orders", {
+      method: "POST",
+      body: {
+        customerName,
+        phone: "9999999123",
+        address: addressLine,
+        deliveryLocation: { city: "Test City", state: "Test State", postalCode: "00000" },
+        items: [{ id: offerDish.id, quantity: 2 }],
+      },
+    }, 201, (data) => {
+      assert.equal(data.subtotal, Number(offerDish.price));
+      assert.equal(data.itemDiscount, Number(offerDish.oldPrice) * 2 - Number(offerDish.price));
+    });
+    await check("Buy-one-get-one order line retains two dishes at one-dish price", "/account/orders", undefined, 200, (data) => {
+      const order = data.find((item) => item.id === offerOrder.orderId);
+      assert.ok(order);
+      assert.equal(order.deliveryCity, "Test City");
+      assert.equal(order.deliveryState, "Test State");
+      assert.equal(order.deliveryPostalCode, "00000");
+      assert.equal(order.items.find((item) => item.dishName === offerDish.name)?.quantity, 2);
+      assert.equal(Number(order.items.find((item) => item.dishName === offerDish.name)?.lineTotal), Number(offerDish.price));
+    });
+    await check("Odd Buy-one-get-one quantities charge for the unpaired dish", "/orders", {
+      method: "POST",
+      body: {
+        customerName,
+        phone: "9999999123",
+        address: addressLine,
+        deliveryLocation: { city: "Test City", state: "Test State", postalCode: "00000" },
+        items: [{ id: offerDish.id, quantity: 3 }],
+      },
+    }, 201, (data) => {
+      assert.equal(data.subtotal, Number(offerDish.price) * 2);
+      assert.equal(data.itemDiscount, Number(offerDish.oldPrice) * 3 - Number(offerDish.price) * 2);
+    });
+  } else {
+    console.log("SKIP Buy-one-get-one API checks: no eligible recommended dish is configured.");
+  }
   await check("Empty wishlist loads", "/account/wishlist", undefined, 200, (data) => {
     assert.ok(Array.isArray(data));
   });
@@ -152,8 +196,52 @@ try {
   await check("Wishlist removal persists", "/account/wishlist", undefined, 200, (data) => {
     assert.ok(!data.some((dish) => dish.id === dishId));
   });
+  const listName = `TEST LIST ${marker.slice(0, 8)}`;
+  const customList = await check("Create a custom wishlist section", "/account/wishlist/lists", {
+    method: "POST",
+    body: { name: listName },
+  }, 201);
+  await check("Duplicate wishlist section names are rejected", "/account/wishlist/lists", {
+    method: "POST",
+    body: { name: listName },
+  }, 409);
+  await check("Add dish to custom wishlist section", `/account/wishlist/${dishId}`, {
+    method: "POST",
+    body: { listId: customList.id },
+  }, 201);
+  await check("Save same dish to default and custom sections", `/account/wishlist/${dishId}`, {
+    method: "POST",
+  }, 201);
+  await check("Remove dish from one section without unsaving it globally", `/account/wishlist/${dishId}?listId=${customList.id}`, {
+    method: "DELETE",
+  }, 200, (data) => {
+    assert.equal(data.saved, true);
+  });
+  await check("Dish remains in its other wishlist section", "/account/wishlist/lists", undefined, 200, (data) => {
+    assert.ok(data.some((list) => list.name === "My wishlist" && list.dishes.some((dish) => dish.id === dishId)));
+    assert.ok(data.some((list) => list.id === customList.id && list.dishes.length === 0));
+  });
+  await check("Save dish back to custom section", `/account/wishlist/${dishId}`, {
+    method: "POST",
+    body: { listId: customList.id },
+  }, 201);
+  await check("Custom section and dish persist", "/account/wishlist/lists", undefined, 200, (data) => {
+    assert.ok(data.some((list) => list.id === customList.id && list.name === listName
+      && list.dishes.some((dish) => dish.id === dishId)));
+  });
+  const renamedList = `${listName} RENAMED`;
+  await check("Rename custom wishlist section", `/account/wishlist/lists/${customList.id}`, {
+    method: "PUT",
+    body: { name: renamedList },
+  }, 200);
+  await check("Delete custom wishlist section", `/account/wishlist/lists/${customList.id}`, {
+    method: "DELETE",
+  }, 200);
+  await check("Deleted section is absent", "/account/wishlist/lists", undefined, 200, (data) => {
+    assert.ok(!data.some((list) => list.id === customList.id));
+  });
 
-  await check("Empty order history loads", "/account/orders", undefined, 200, (data) => {
+  await check("Order history loads after offer order", "/account/orders", undefined, 200, (data) => {
     assert.ok(Array.isArray(data));
   });
   const createdOrder = await check("Authenticated checkout creates a test order", "/orders", {
@@ -162,6 +250,7 @@ try {
       customerName,
       phone: "9999999123",
       address: addressLine,
+      deliveryLocation: { city: "Test City", state: "Test State", postalCode: "00000" },
       items: [{ id: dishId, quantity: 1 }],
     },
   }, 201, (data) => assert.ok(data.orderId));

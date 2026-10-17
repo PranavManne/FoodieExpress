@@ -26,6 +26,7 @@ export default function Account() {
   const [addressForm, setAddressForm] = useState(emptyAddress);
   const [editingAddress, setEditingAddress] = useState(null);
   const [wishlist, setWishlist] = useState([]);
+  const [wishlistListName, setWishlistListName] = useState("");
   const [orders, setOrders] = useState([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -54,7 +55,7 @@ export default function Account() {
     setError("");
     try {
       if (currentSection === "addresses") setAddresses(await request("/account/addresses"));
-      if (currentSection === "wishlist") setWishlist(await request("/account/wishlist"));
+      if (currentSection === "wishlist") setWishlist(await request("/account/wishlist/lists"));
       if (currentSection === "orders" || currentSection === "cancellations") {
         setOrders(await request("/account/orders"));
       }
@@ -154,14 +155,91 @@ export default function Account() {
     }
   }
 
-  async function removeWishlistItem(id) {
+  async function addWishlistItemToList(dish, listId) {
     try {
-      await request(`/account/wishlist/${id}`, { method: "DELETE" });
-      setWishlist((current) => current.filter((dish) => dish.id !== id));
-      setMessage("Dish removed from your wishlist.");
-      window.dispatchEvent(new CustomEvent("foodieexpress:wishlist-updated", { detail: { dishId: id, saved: false } }));
+      await request(`/account/wishlist/${dish.id}`, {
+        method: "POST",
+        body: JSON.stringify({ listId }),
+      });
+      setMessage(`${dish.name} saved to another section.`);
+      window.dispatchEvent(new CustomEvent("foodieexpress:wishlist-updated", {
+        detail: { dishId: dish.id, saved: true },
+      }));
+      await loadSection("wishlist");
+    } catch (saveError) {
+      setError(saveError.message);
+    }
+  }
+
+  async function removeWishlistItem(dish, listId) {
+    try {
+      const result = await request(`/account/wishlist/${dish.id}?listId=${listId}`, { method: "DELETE" });
+      setWishlist((current) => current.map((list) => list.id === listId
+        ? { ...list, dishes: list.dishes.filter((item) => item.id !== dish.id) }
+        : list));
+      setMessage("Dish removed from this wishlist section.");
+      window.dispatchEvent(new CustomEvent("foodieexpress:wishlist-updated", {
+        detail: { dishId: dish.id, saved: result.saved },
+      }));
     } catch (removeError) {
       setError(removeError.message);
+    }
+  }
+
+  async function createWishlistList(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await request("/account/wishlist/lists", {
+        method: "POST",
+        body: JSON.stringify({ name: wishlistListName }),
+      });
+      setWishlistListName("");
+      setMessage("Your wishlist section was created.");
+      await loadSection("wishlist");
+    } catch (createError) {
+      setError(createError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renameWishlistList(list) {
+    const name = window.prompt("Name this wishlist section:", list.name);
+    if (name === null || !name.trim() || name.trim() === list.name) return;
+    try {
+      await request(`/account/wishlist/lists/${list.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name }),
+      });
+      setMessage("Wishlist section renamed.");
+      await loadSection("wishlist");
+    } catch (renameError) {
+      setError(renameError.message);
+    }
+  }
+
+  async function deleteWishlistList(list) {
+    const contents = list.dishes.length
+      ? ` This will also remove its ${list.dishes.length} saved ${list.dishes.length === 1 ? "dish" : "dishes"}.`
+      : "";
+    if (!window.confirm(`Delete the "${list.name}" section?${contents}`)) return;
+    try {
+      await request(`/account/wishlist/lists/${list.id}`, { method: "DELETE" });
+      setMessage(`The "${list.name}" section was deleted.`);
+      const savedDishes = await request("/account/wishlist");
+      const savedIds = new Set(savedDishes.map((dish) => dish.id));
+      window.dispatchEvent(new CustomEvent("foodieexpress:wishlist-updated", {
+        detail: {
+          dishIds: list.dishes.map((dish) => dish.id),
+          savedDishIds: [...savedIds],
+        },
+      }));
+      await loadSection("wishlist");
+    } catch (deleteError) {
+      setError(deleteError.message);
     }
   }
 
@@ -251,18 +329,66 @@ export default function Account() {
               <>
                 <div className="account-panel-heading">
                   <span className="account-eyebrow">SAVED FOR LATER</span><h2>Wishlist</h2>
-                  <p>Your favourite menu picks, ready when you are.</p>
+                  <p>Create a section for anyone in your family, then keep their favourite dishes together.</p>
                 </div>
+                <form className="account-list-create" onSubmit={createWishlistList}>
+                  <label>
+                    <span>New section name</span>
+                    <input
+                      value={wishlistListName}
+                      maxLength={60}
+                      placeholder="For my wife, son, daughter…"
+                      required
+                      onChange={(event) => setWishlistListName(event.target.value)}
+                    />
+                  </label>
+                  <button className="account-primary" type="submit" disabled={busy}>
+                    {busy ? "Creating…" : "Create section"}
+                  </button>
+                </form>
                 {loading ? <p className="account-empty">Loading your wishlist…</p> : wishlist.length === 0 ? (
-                  <div className="account-empty">Your wishlist is empty. Browse the menu and tap the heart on a dish to save it.</div>
+                  <div className="account-empty">No sections yet. Create one above to start a family wishlist.</div>
                 ) : (
                   <div className="account-wishlist">
-                    {wishlist.map((dish) => (
-                      <article className="account-dish" key={dish.id}>
-                        <img src={dish.image || undefined} alt="" />
-                        <div><span>{dish.category}</span><h3>{dish.name}</h3><strong>₹{dish.price}</strong></div>
-                        <button type="button" aria-label={`Remove ${dish.name} from wishlist`} onClick={() => removeWishlistItem(dish.id)}>♥</button>
-                      </article>
+                    {wishlist.map((list) => (
+                      <section className="account-wishlist-list" key={list.id}>
+                        <header className="account-wishlist-list__heading">
+                          <div>
+                            <span className="account-eyebrow">WISHLIST SECTION</span>
+                            <h3>{list.name}</h3>
+                            <p>{list.dishes.length} saved {list.dishes.length === 1 ? "dish" : "dishes"}</p>
+                          </div>
+                          <div className="account-wishlist-list__actions">
+                            <button type="button" onClick={() => renameWishlistList(list)}>Rename</button>
+                            <button type="button" onClick={() => deleteWishlistList(list)}>Delete</button>
+                          </div>
+                        </header>
+                        {list.dishes.length === 0 ? (
+                          <p className="account-wishlist-list__empty">Nothing saved here yet. Add dishes from the menu with the heart button.</p>
+                        ) : list.dishes.map((dish) => (
+                          <article className="account-dish" key={`${list.id}-${dish.id}`}>
+                            <img src={dish.image || undefined} alt="" />
+                            <div><span>{dish.category}</span><h3>{dish.name}</h3><strong>₹{dish.price}</strong></div>
+                            <div className="account-dish-actions">
+                              {wishlist.length > 1 && (
+                                <label>
+                                  <span className="account-visually-hidden">Also save {dish.name} to another section</span>
+                                  <select defaultValue="" aria-label={`Also save ${dish.name} to another section`} onChange={(event) => {
+                                    if (event.target.value) addWishlistItemToList(dish, Number(event.target.value));
+                                    event.target.value = "";
+                                  }}>
+                                    <option value="">Also save to…</option>
+                                    {wishlist.filter((other) => other.id !== list.id).map((other) => (
+                                      <option value={other.id} key={other.id}>{other.name}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              )}
+                              <button type="button" aria-label={`Remove ${dish.name} from ${list.name}`} onClick={() => removeWishlistItem(dish, list.id)}>♥</button>
+                            </div>
+                          </article>
+                        ))}
+                      </section>
                     ))}
                   </div>
                 )}
@@ -275,6 +401,23 @@ export default function Account() {
                   <span className="account-eyebrow">DELIVERY LOCATIONS</span><h2>Address book</h2>
                   <p>Save the places where your favourite meals should arrive.</p>
                 </div>
+                {loading ? <p className="account-empty">Loading saved addresses…</p> : (
+                  <div className="account-addresses">
+                    {addresses.map((address) => (
+                      <article className="account-address" key={address.id}>
+                        <div><div className="account-address-title"><strong>{address.label}</strong>{Boolean(address.isDefault) && <span>DEFAULT</span>}</div>
+                          <p>{address.recipient} · {address.phone}<br />{address.line1}{address.line2 ? `, ${address.line2}` : ""}<br />{address.city}, {address.state} {address.postalCode}</p>
+                        </div>
+                        <div className="account-address-actions">
+                          <button type="button" onClick={() => editAddress(address)}>Edit</button>
+                          <button type="button" onClick={() => removeAddress(address.id)}>Remove</button>
+                        </div>
+                      </article>
+                    ))}
+                    {!addresses.length && <p className="account-empty">No saved addresses yet.</p>}
+                  </div>
+                )}
+                <h3 className="account-address-form-title">{editingAddress ? "Edit saved address" : "Add a new address"}</h3>
                 <form className="account-form account-address-form" onSubmit={saveAddress}>
                   <label><span>Label</span><select value={addressForm.label} onChange={(event) => setAddressForm({ ...addressForm, label: event.target.value })}>
                     <option>Home</option><option>Work</option><option>Other</option>
@@ -292,22 +435,6 @@ export default function Account() {
                     {editingAddress && <button className="account-secondary" type="button" onClick={() => { setEditingAddress(null); setAddressForm(emptyAddress); }}>Cancel</button>}
                   </div>
                 </form>
-                {loading ? <p className="account-empty">Loading saved addresses…</p> : (
-                  <div className="account-addresses">
-                    {addresses.map((address) => (
-                      <article className="account-address" key={address.id}>
-                        <div><div className="account-address-title"><strong>{address.label}</strong>{Boolean(address.isDefault) && <span>DEFAULT</span>}</div>
-                          <p>{address.recipient} · {address.phone}<br />{address.line1}{address.line2 ? `, ${address.line2}` : ""}<br />{address.city}, {address.state} {address.postalCode}</p>
-                        </div>
-                        <div className="account-address-actions">
-                          <button type="button" onClick={() => editAddress(address)}>Edit</button>
-                          <button type="button" onClick={() => removeAddress(address.id)}>Remove</button>
-                        </div>
-                      </article>
-                    ))}
-                    {!addresses.length && <p className="account-empty">No saved addresses yet.</p>}
-                  </div>
-                )}
               </>
             )}
 
@@ -328,7 +455,7 @@ export default function Account() {
                           <div><span>ORDER #{order.id}</span><h3>{formatDate(order.createdAt)}</h3></div>
                           <span className={`account-order-status account-order-status--${order.status.toLowerCase().replaceAll(" ", "-")}`}>{order.status}</span>
                         </div>
-                        <ul>{order.items.map((item, index) => <li key={`${order.id}-${index}`}><span>{item.dishName} × {item.quantity}</span><span>₹{Number(item.lineTotal).toFixed(2)}</span></li>)}</ul>
+                        <ul>{order.items.map((item, index) => <li key={`${order.id}-${index}`}><span>{item.dishName} × {item.quantity}{item.offerTitle && <small className="account-order-offer">{item.offerTitle} · saved ₹{Number(item.offerDiscount).toFixed(2)}</small>}</span><span>₹{Number(item.lineTotal).toFixed(2)}</span></li>)}</ul>
                         <div className="account-order-total"><span>Total</span><strong>₹{Number(order.total).toFixed(2)}</strong></div>
                         {order.status === "Pending" && <button className="account-cancel" type="button" onClick={() => cancelOrder(order.id)}>Cancel order</button>}
                       </article>

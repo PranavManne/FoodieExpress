@@ -61,17 +61,122 @@ function BagIcon() {
 
 }
 
+function offerBadge(offer) {
+  if (!offer) return "";
+  if (offer.type === "bogo") return "BUY 1 GET 1 FREE";
+  if (offer.type === "percent") return `${Number(offer.value)}% OFF`;
+  return `₹${Number(offer.value).toFixed(2)} OFF`;
+}
 
+function offerSavingsCents(dish, quantity) {
+  const priceCents = Math.round(Number(dish.price) * 100);
+  const offer = dish.offer;
+  if (!offer || quantity <= 0) return 0;
+  if (offer.type === "bogo") return priceCents * Math.floor(quantity / 2);
+  if (offer.type === "percent") {
+    return Math.min(priceCents, Math.round(priceCents * Number(offer.value) / 100)) * quantity;
+  }
+  if (offer.type === "fixed") {
+    return Math.min(priceCents, Math.round(Number(offer.value) * 100)) * quantity;
+  }
+  return 0;
+}
 
+function offerUnitPriceCents(dish) {
+  const priceCents = Math.round(Number(dish.price) * 100);
+  if (dish.offer?.type === "percent") {
+    return priceCents - Math.min(priceCents, Math.round(priceCents * Number(dish.offer.value) / 100));
+  }
+  if (dish.offer?.type === "fixed") {
+    return priceCents - Math.min(priceCents, Math.round(Number(dish.offer.value) * 100));
+  }
+  return priceCents;
+}
 
+function DishMediaGallery({ dish, className = "" }) {
+  const media = [
+    ...(dish.image ? [{ id: "cover", type: "image", path: dish.image }] : []),
+    ...(dish.gallery || []),
+  ];
+  const [activeIndex, setActiveIndex] = useState(0);
 
-function FoodCard({ dish, onAdd, onWishlist, wishlisted }) {
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [dish.id]);
 
-  const discount = Math.round(
+  if (!media.length) {
+    return <div className={`dish-media-gallery dish-media-gallery--empty ${className}`} aria-label={`No photos for ${dish.name}`} />;
+  }
 
-    ((dish.oldPrice - dish.price) / dish.oldPrice) * 100
+  const currentIndex = Math.min(activeIndex, media.length - 1);
+  const currentMedia = media[currentIndex];
+  const apiOrigin = API_BASE_URL.replace(/\/api\/?$/, "");
+  const src = /^https?:\/\//i.test(currentMedia.path)
+    ? currentMedia.path
+    : new URL(currentMedia.path, `${apiOrigin}/`).href;
 
+  return (
+    <div className={`dish-media-gallery ${className}`}>
+      {currentMedia.type === "video" ? (
+        <video className="dish-media-gallery__asset" src={src} controls playsInline preload="metadata"
+          aria-label={`${dish.name} video`} />
+      ) : (
+        <img className={`dish-media-gallery__asset${className.includes("food-card") ? " food-card__image" : ""}`}
+          src={src} alt={dish.name} loading="lazy" />
+      )}
+      {media.length > 1 && (
+        <div className="dish-media-gallery__controls" aria-label={`${dish.name} gallery`}>
+          <button type="button" aria-label="Previous gallery item"
+            onClick={() => setActiveIndex((currentIndex + media.length - 1) % media.length)}>‹</button>
+          <span>{currentIndex + 1}/{media.length}</span>
+          <button type="button" aria-label="Next gallery item"
+            onClick={() => setActiveIndex((currentIndex + 1) % media.length)}>›</button>
+        </div>
+      )}
+    </div>
   );
+}
+
+function RecommendationsSection({ dishes, onAdd, loading, error }) {
+  if (loading || error || dishes.length === 0) return null;
+  return (
+    <section className="menu-recommendations" aria-labelledby="menu-recommendations-title">
+      <div className="menu-recommendations__heading">
+        <div>
+          <span className="eyebrow-line" />
+          RESTAURANT FAVOURITES
+          <h3 id="menu-recommendations-title">Our best picks, <em>made for you.</em></h3>
+        </div>
+        <p>Discover the dishes our restaurant recommends. Look for a special offer and add a favourite straight to your bag.</p>
+      </div>
+      <div className="menu-recommendations__grid">
+        {dishes.map((dish) => {
+          const isBogo = dish.offer?.type === "bogo";
+          const discountPrice = offerUnitPriceCents(dish) / 100;
+          const actionLabel = isBogo ? `Add pair · ₹${Number(dish.price).toFixed(2)}` : `Add to bag · ₹${discountPrice.toFixed(2)}`;
+          return (
+            <article className="recommendation-card" key={dish.id}>
+              <DishMediaGallery dish={dish} className="recommendation-card__media" />
+              <div className="recommendation-card__content">
+                <span>{dish.offer ? offerBadge(dish.offer) : (dish.tag || "RESTAURANT FAVOURITE")}</span>
+                <h4>{dish.name}</h4>
+                <p>{dish.offer?.description || (isBogo ? `₹${Number(dish.price).toFixed(2)} for two when you add a pair` : "One of our restaurant's recommended dishes.")}</p>
+                <button type="button" onClick={() => onAdd(dish, isBogo ? 2 : 1)}>{actionLabel}</button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+
+function FoodCard({ dish, onAdd, wishlisted, wishlistLists, wishlistOpen, onToggleWishlistPicker, onSelectWishlist }) {
+  const priceCents = offerUnitPriceCents(dish);
+  const displayPrice = priceCents / 100;
+  const comparedPrice = Number(dish.oldPrice);
+  const discount = Math.round(((comparedPrice - displayPrice) / comparedPrice) * 100);
 
 
 
@@ -80,30 +185,44 @@ function FoodCard({ dish, onAdd, onWishlist, wishlisted }) {
     <article className="food-card">
 
       <div className="food-card__image-wrap">
-
-        <img
-
-          className="food-card__image"
-
-          src={dish.image || undefined}
-
-          alt={dish.name}
-
-          loading="lazy"
-
-        />
+        <DishMediaGallery dish={dish} className="food-card__image-frame" />
 
         <span className="food-tag">{dish.tag}</span>
+        {dish.offer && <span className="food-offer-badge">{offerBadge(dish.offer)}</span>}
 
         <button
           className={`wishlist-button${wishlisted ? " is-saved" : ""}`}
           type="button"
-          onClick={() => onWishlist(dish)}
-          aria-label={`${wishlisted ? "Remove" : "Add"} ${dish.name} ${wishlisted ? "from" : "to"} wishlist`}
-          aria-pressed={wishlisted}
+          onClick={() => onToggleWishlistPicker(dish)}
+          aria-label={`Choose a wishlist section for ${dish.name}`}
+          aria-expanded={wishlistOpen}
+          aria-controls={`wishlist-picker-${dish.id}`}
         >
           {wishlisted ? "♥" : "♡"}
         </button>
+
+        {wishlistOpen && (
+          <div className="wishlist-picker" id={`wishlist-picker-${dish.id}`} role="group" aria-label={`Choose a wishlist section for ${dish.name}`}>
+            <strong>Save to a section</strong>
+            {wishlistLists.length === 0 ? (
+              <p>No wishlist sections yet. Create one in your account.</p>
+            ) : wishlistLists.map((list) => {
+              const saved = list.dishes.some((item) => item.id === dish.id);
+              return (
+                <button
+                  className="wishlist-picker__option"
+                  type="button"
+                  key={list.id}
+                  onClick={() => onSelectWishlist(dish, list, saved)}
+                >
+                  <span>{list.name}</span>
+                  <span>{saved ? "♥ Saved" : "＋ Save"}</span>
+                </button>
+              );
+            })}
+            <a href="/account">Manage sections ↗</a>
+          </div>
+        )}
 
         <button
 
@@ -149,11 +268,9 @@ function FoodCard({ dish, onAdd, onWishlist, wishlisted }) {
 
         <div className="food-price-row">
 
-          <strong className="sale-price">₹{dish.price}</strong>
-
-          <span className="old-price">₹{dish.oldPrice}</span>
-
-          <span className="discount-badge">{discount}% OFF</span>
+          <strong className="sale-price">₹{displayPrice.toFixed(2)}</strong>
+          <span className="old-price">₹{comparedPrice.toFixed(2)}</span>
+          {discount > 0 && <span className="discount-badge">{discount}% OFF</span>}
 
         </div>
 
@@ -184,22 +301,93 @@ function loadSavedCart() {
   }
 }
 
-export default function App() {
+function loadSavedBundleCart() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem("foodieexpress-bundle-cart") || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+    return Object.fromEntries(
+      Object.entries(saved).filter(([id, quantity]) =>
+        Number.isInteger(Number(id)) && Number(id) > 0 &&
+        Number.isInteger(quantity) && quantity > 0 && quantity <= 99,
+      ),
+    );
+  } catch (error) {
+    console.error("Saved bundle cart could not be loaded:", error);
+    return {};
+  }
+}
+
+function BundlesSection({ bundles, onAdd }) {
+  if (!bundles.length) return null;
+  return (
+    <section className="menu-recommendations menu-bundles" aria-labelledby="menu-bundles-title">
+      <div className="menu-recommendations__heading">
+        <div>
+          <span className="eyebrow-line" />
+          MADE-TO-ORDER COMBOS
+          <h3 id="menu-bundles-title">Bundle a little <em>happiness.</em></h3>
+        </div>
+        <p>Hand-picked combinations, assembled by our team and priced as one bundle.</p>
+      </div>
+      <div className="menu-recommendations__grid">
+        {bundles.map((bundle) => (
+          <article className="recommendation-card" key={bundle.id}>
+            <img src={bundle.image || undefined} alt={bundle.title} loading="lazy" />
+            <div className="recommendation-card__content">
+              <span>BUNDLE · SAVE ₹{(bundle.regularPrice - bundle.price).toFixed(2)}</span>
+              <h4>{bundle.title}</h4>
+              <p>{bundle.description || bundle.items.map((item) => `${item.name} × ${item.quantity}`).join(" · ")}</p>
+              <button type="button" onClick={() => onAdd(bundle)}>
+                Add bundle · ₹{Number(bundle.price).toFixed(2)}
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const storefrontNavigation = [
+  ["home", "Home", "/"],
+  ["menu", "Our menu", "/menu"],
+  ["story", "Our story", "/story"],
+  ["reviews", "Kind words", "/reviews"],
+  ["contact", "Contact", "/contact"],
+];
+
+const pageTopLinks = {
+  home: "/#home",
+  menu: "/menu#menu",
+  story: "/story#story",
+  reviews: "/reviews#reviews",
+  contact: "/contact#contact",
+};
+
+export default function App({ page = "home" }) {
   const [user, setUser] = useState(null);
   const [dishes, setDishes] = useState([]);
+  const [bundles, setBundles] = useState([]);
   const [menuLoading, setMenuLoading] = useState(true);
   const [menuError, setMenuError] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
+  const [deliveryCity, setDeliveryCity] = useState("");
+  const [deliveryState, setDeliveryState] = useState("");
+  const [deliveryPostalCode, setDeliveryPostalCode] = useState("");
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [activeCategory, setActiveCategory] = useState("All");
   const [wishlistIds, setWishlistIds] = useState([]);
+  const [wishlistLists, setWishlistLists] = useState([]);
+  const [activeWishlistDishId, setActiveWishlistDishId] = useState(null);
   const [savedAddresses, setSavedAddresses] = useState([]);
 
   const [cart, setCart] = useState(loadSavedCart);
+  const [bundleCart, setBundleCart] = useState(loadSavedBundleCart);
 
   const [cartOpen, setCartOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const [toast, setToast] = useState("");
   const [toastError, setToastError] = useState(false);
@@ -270,6 +458,9 @@ export default function App() {
             defaultAddress.state,
             defaultAddress.postalCode,
           ].filter(Boolean).join(", "));
+          setDeliveryCity((current) => current || defaultAddress.city);
+          setDeliveryState((current) => current || defaultAddress.state);
+          setDeliveryPostalCode((current) => current || defaultAddress.postalCode);
         }
       })
       .catch((error) => console.error("Saved addresses could not be loaded:", error));
@@ -280,15 +471,19 @@ export default function App() {
     let active = true;
     if (!user) {
       setWishlistIds([]);
+      setWishlistLists([]);
       return () => { active = false; };
     }
-    fetch(`${API_BASE_URL}/account/wishlist`, { credentials: "include" })
+    fetch(`${API_BASE_URL}/account/wishlist/lists`, { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) throw new Error("Could not load your wishlist.");
         return response.json();
       })
-      .then((items) => {
-        if (active) setWishlistIds(items.map((item) => item.id));
+      .then((lists) => {
+        if (active) {
+          setWishlistLists(lists);
+          setWishlistIds([...new Set(lists.flatMap((list) => list.dishes.map((item) => item.id)))]);
+        }
       })
       .catch((error) => console.error("Wishlist could not be loaded:", error));
     return () => { active = false; };
@@ -301,6 +496,15 @@ export default function App() {
       setCustomerPhone(event.detail.phone || "");
     }
     function wishlistUpdated(event) {
+      if (Array.isArray(event.detail.dishIds)) {
+        const affected = new Set(event.detail.dishIds);
+        const stillSaved = new Set(event.detail.savedDishIds);
+        setWishlistIds((current) => [
+          ...current.filter((id) => !affected.has(id) || stillSaved.has(id)),
+          ...event.detail.savedDishIds.filter((id) => !current.includes(id)),
+        ]);
+        return;
+      }
       setWishlistIds((current) => event.detail.saved
         ? [...new Set([...current, event.detail.dishId])]
         : current.filter((id) => id !== event.detail.dishId));
@@ -316,10 +520,11 @@ export default function App() {
   useEffect(() => {
     try {
       window.localStorage.setItem("foodieexpress-cart", JSON.stringify(cart));
+      window.localStorage.setItem("foodieexpress-bundle-cart", JSON.stringify(bundleCart));
     } catch (error) {
       console.error("Cart could not be saved:", error);
     }
-  }, [cart]);
+  }, [cart,bundleCart]);
 
 
 
@@ -328,13 +533,19 @@ export default function App() {
 
     async function loadDishes() {
       try {
-        const response = await fetch(`${API_BASE_URL}/foods`);
-        if (!response.ok) throw new Error("Unable to load the menu.");
-        const data = await response.json();
-        if (active) setDishes(data);
+        const [menuResponse, bundlesResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/foods`),
+          fetch(`${API_BASE_URL}/bundles`),
+        ]);
+        if (!menuResponse.ok || !bundlesResponse.ok) throw new Error("Unable to load the menu and bundles.");
+        const [menuData, bundleData] = await Promise.all([menuResponse.json(), bundlesResponse.json()]);
+        if (active) {
+          setDishes(menuData);
+          setBundles(bundleData);
+        }
       } catch (error) {
         console.error("Menu loading failed:", error);
-        if (active) setMenuError("Unable to load the menu. Please check that the backend is running.");
+        if (active) setMenuError("Unable to load the menu and bundles. Please check that the backend is running.");
       } finally {
         if (active) setMenuLoading(false);
       }
@@ -349,23 +560,37 @@ export default function App() {
     (sum, quantity) => sum + quantity,
 
     0
-
+  ) + Object.values(bundleCart).reduce(
+    (sum, quantity) => sum + quantity,
+    0,
   );
 
 
 
   const cartItems = dishes.filter((dish) => cart[dish.id] > 0);
+  const bundleCartItems = bundles.filter((bundle) => bundleCart[bundle.id] > 0);
+  const offerSavings = cartItems.reduce(
+    (sum, dish) => sum + offerSavingsCents(dish, cart[dish.id]),
+    0,
+  );
 
-
-
-  const cartTotalCents = cartItems.reduce(
+  const cartListTotalCents = cartItems.reduce(
     (sum, dish) => sum + Math.round(Number(dish.price) * 100) * cart[dish.id],
     0,
   );
+  const bundleSubtotalCents = bundleCartItems.reduce(
+    (sum, bundle) => sum + Math.round(Number(bundle.price) * 100) * bundleCart[bundle.id],
+    0,
+  );
+  const bundleOriginalTotalCents = bundleCartItems.reduce(
+    (sum, bundle) => sum + Math.round(Number(bundle.originalPrice) * 100) * bundleCart[bundle.id],
+    0,
+  );
+  const cartTotalCents = cartListTotalCents - offerSavings + bundleSubtotalCents;
   const originalTotalCents = cartItems.reduce(
     (sum, dish) => sum + Math.round(Number(dish.oldPrice) * 100) * cart[dish.id],
     0,
-  );
+  ) + bundleOriginalTotalCents;
   const cartTotal = cartTotalCents / 100;
   const originalTotal = originalTotalCents / 100;
   const itemDiscount = (originalTotalCents - cartTotalCents) / 100;
@@ -388,13 +613,12 @@ export default function App() {
     activeCategory === "All"
 
       ? dishes
-
       : dishes.filter((dish) => dish.category === activeCategory);
 
-
+  const recommendedDishes = dishes.filter((dish) => dish.isRecommended);
 
   function changeQuantity(dish, amount) {
-    if (amount > 0 && (cart[dish.id] || 0) >= 99) {
+    if (amount > 0 && (cart[dish.id] || 0) + amount > 99) {
       notify("Maximum quantity per dish is 99.", true);
       return;
     }
@@ -436,25 +660,69 @@ export default function App() {
 
   }
 
-  async function toggleWishlist(dish) {
+  function addRecommendedDish(dish, quantity = 1) {
+    changeQuantity(dish, quantity);
+  }
+
+  function changeBundleQuantity(bundle, amount) {
+    setBundleCart((current) => {
+      const nextQuantity = (current[bundle.id] || 0) + amount;
+      if (nextQuantity > 99) {
+        notify("Maximum quantity per bundle is 99.", true);
+        return current;
+      }
+      const next = { ...current };
+      if (nextQuantity <= 0) delete next[bundle.id];
+      else next[bundle.id] = nextQuantity;
+      return next;
+    });
+    if (amount > 0) notify(`${bundle.title} added to your bag`);
+  }
+
+  async function toggleWishlistPicker(dish) {
     if (!user) {
       window.location.assign("/login?next=wishlist");
       return;
     }
-    const isSaved = wishlistIds.includes(dish.id);
+    const nextDishId = activeWishlistDishId === dish.id ? null : dish.id;
+    setActiveWishlistDishId(nextDishId);
+    if (nextDishId !== null) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/account/wishlist/lists`, { credentials: "include" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load your wishlist sections.");
+        setWishlistLists(data);
+        setWishlistIds([...new Set(data.flatMap((list) => list.dishes.map((item) => item.id)))]);
+      } catch (error) {
+        setActiveWishlistDishId(null);
+        notify(error.message || "Could not load your wishlist sections.", true, 4000);
+      }
+    }
+  }
+
+  async function chooseWishlistSection(dish, list, isSaved) {
     try {
-      const response = await fetch(`${API_BASE_URL}/account/wishlist/${dish.id}`, {
+      const response = await fetch(`${API_BASE_URL}/account/wishlist/${dish.id}${isSaved ? `?listId=${list.id}` : ""}`, {
         method: isSaved ? "DELETE" : "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: isSaved ? undefined : JSON.stringify({ listId: list.id }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Could not update your wishlist.");
-      setWishlistIds((current) => isSaved
-        ? current.filter((id) => id !== dish.id)
-        : [...new Set([...current, dish.id])]);
-      notify(isSaved ? `${dish.name} removed from your wishlist` : `${dish.name} saved to your wishlist`);
+      setWishlistLists((current) => current.map((item) => item.id === list.id
+        ? { ...item, dishes: isSaved
+          ? item.dishes.filter((savedDish) => savedDish.id !== dish.id)
+          : [...item.dishes, dish] }
+        : item));
+      const stillSaved = isSaved && wishlistLists.some((item) => item.id !== list.id
+        && item.dishes.some((savedDish) => savedDish.id === dish.id));
+      if (isSaved && !stillSaved) setWishlistIds((current) => current.filter((id) => id !== dish.id));
+      if (!isSaved) setWishlistIds((current) => [...new Set([...current, dish.id])]);
+      setActiveWishlistDishId(null);
+      notify(isSaved ? `${dish.name} removed from ${list.name}` : `${dish.name} saved to ${list.name}`);
       window.dispatchEvent(new CustomEvent("foodieexpress:wishlist-updated", {
-        detail: { dishId: dish.id, saved: !isSaved },
+        detail: { dishId: dish.id, saved: isSaved ? Boolean(stillSaved) : true },
       }));
     } catch (error) {
       notify(error.message || "Could not update your wishlist.", true, 4000);
@@ -498,8 +766,9 @@ export default function App() {
 
   async function handleCheckout(event) {
     event.preventDefault();
-    if (cartItems.length === 0 || orderSubmitting) return;
-    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
+    if ((cartItems.length === 0 && bundleCartItems.length === 0) || orderSubmitting) return;
+    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim() ||
+        !deliveryCity.trim() || !deliveryState.trim() || !deliveryPostalCode.trim()) {
       notify("Please fill in all delivery details.", true, 4000);
       return;
     }
@@ -518,9 +787,18 @@ export default function App() {
           customerName: customerName.trim(),
           phone: customerPhone.trim(),
           address: customerAddress.trim(),
+          deliveryLocation: {
+            city: deliveryCity.trim(),
+            state: deliveryState.trim(),
+            postalCode: deliveryPostalCode.trim(),
+          },
           items: cartItems.map((dish) => ({
             id: dish.id,
             quantity: cart[dish.id],
+          })),
+          bundles: bundleCartItems.map((bundle) => ({
+            id: bundle.id,
+            quantity: bundleCart[bundle.id],
           })),
         }),
       });
@@ -529,10 +807,14 @@ export default function App() {
       if (!response.ok) throw new Error(data.error || `Could not place order (HTTP ${response.status}).`);
 
       setCart({});
+      setBundleCart({});
       setCartOpen(false);
       setCustomerName("");
       setCustomerPhone("");
       setCustomerAddress("");
+      setDeliveryCity("");
+      setDeliveryState("");
+      setDeliveryPostalCode("");
       notify(`Order #${data.orderId} saved successfully!`, false, 4000);
     } catch (error) {
       console.error("Checkout failed:", error);
@@ -543,15 +825,9 @@ export default function App() {
   }
 
   function browseMenu() {
-
     setCartOpen(false);
-
-    document.getElementById("menu")?.scrollIntoView({
-
-      behavior: "smooth",
-
-    });
-
+    if (page !== "menu") window.location.assign("/menu");
+    else document.getElementById("menu")?.scrollIntoView({ behavior: "smooth" });
   }
 
 
@@ -572,7 +848,7 @@ export default function App() {
 
         </span>
 
-        <a href="#menu">
+        <a href="/menu">
 
           Explore the menu <span>↗</span>
 
@@ -584,7 +860,7 @@ export default function App() {
 
       <header className="site-header">
 
-        <a className="brand" href="#home" aria-label="FoodieExpress home">
+        <a className="brand" href="/" aria-label="FoodieExpress home">
 
           <span className="brand__mark">
 
@@ -602,17 +878,13 @@ export default function App() {
 
 
 
-        <nav className="main-nav" aria-label="Main navigation">
+        <nav className={`main-nav${mobileNavOpen ? " is-open" : ""}`} aria-label="Main navigation">
 
-          <a className="active" href="#home">Home</a>
-
-          <a href="#menu">Our menu</a>
-
-          <a href="#story">Our story</a>
-
-          <a href="#reviews">Kind words</a>
-
-          <a href="#contact">Contact</a>
+          {storefrontNavigation.map(([id, label, href]) => (
+            <a key={id} className={page === id ? "active" : ""} href={href} aria-current={page === id ? "page" : undefined}>
+              {label}
+            </a>
+          ))}
 
         </nav>
 
@@ -621,16 +893,17 @@ export default function App() {
         <div className="header-actions">
           {user ? (
             <>
-              {user.role === "admin" && <a className="header-account" href="/admin">Admin</a>}
-              <a className="account-greeting" href="/account">Hi, {user.name}</a>
-              <a className="header-account header-account--mobile" href="/account">My account</a>
+              <a className="account-greeting" href="/account" aria-label={`Open My account for ${user.name}`} title="Open My account">
+                <span>Hi, {user.name}</span><span className="account-greeting__arrow" aria-hidden="true">↗</span>
+              </a>
+              <a className="header-account header-account--mobile" href="/account" aria-label="Open My account">My account ↗</a>
               <button className="account-signout" type="button" onClick={signOut}>Sign out</button>
             </>
           ) : (
             <a className="header-account" href="/login">Sign in</a>
           )}
 
-          <a className="header-order" href="#menu">
+          <a className="header-order" href="/menu">
 
             Order something good <ArrowUpRight />
 
@@ -661,13 +934,10 @@ export default function App() {
           <button
 
             className="mobile-menu"
-
             type="button"
-
-            onClick={browseMenu}
-
-            aria-label="Jump to menu"
-
+            onClick={() => setMobileNavOpen((open) => !open)}
+            aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={mobileNavOpen}
           >
 
             <span />
@@ -684,6 +954,7 @@ export default function App() {
 
       <main>
 
+        {page === "home" && <>
         <section className="hero section-pad" id="home">
 
           <div className="hero-copy">
@@ -724,13 +995,13 @@ export default function App() {
 
             <div className="hero-actions">
 
-              <a className="button button--dark" href="#menu">
+              <a className="button button--dark" href="/menu">
 
                 Explore the menu <ArrowUpRight />
 
               </a>
 
-              <a className="text-link" href="#story">
+              <a className="text-link" href="/story">
 
                 Get to know us <span>↗</span>
 
@@ -876,7 +1147,15 @@ export default function App() {
 
         </section>
 
-
+        <div className="section-pad">
+          <RecommendationsSection
+            dishes={recommendedDishes}
+            onAdd={addRecommendedDish}
+            loading={menuLoading}
+            error={menuError}
+          />
+          <BundlesSection bundles={bundles} onAdd={(bundle) => changeBundleQuantity(bundle, 1)} />
+        </div>
 
         <section className="benefits-strip" aria-label="What makes us different">
 
@@ -921,10 +1200,9 @@ export default function App() {
           </div>
 
         </section>
+        </>}
 
-
-
-        <section className="menu-section section-pad" id="menu">
+        {page === "menu" && <section className="menu-section section-pad" id="menu">
 
           <div className="section-heading">
 
@@ -957,6 +1235,14 @@ export default function App() {
           </div>
 
 
+
+          <RecommendationsSection
+            dishes={recommendedDishes}
+            onAdd={addRecommendedDish}
+            loading={menuLoading}
+            error={menuError}
+          />
+          <BundlesSection bundles={bundles} onAdd={(bundle) => changeBundleQuantity(bundle, 1)} />
 
           <div className="menu-toolbar">
 
@@ -1025,8 +1311,11 @@ export default function App() {
                   key={dish.id}
                   dish={dish}
                   onAdd={addToBag}
-                  onWishlist={toggleWishlist}
                   wishlisted={wishlistIds.includes(dish.id)}
+                  wishlistLists={wishlistLists}
+                  wishlistOpen={activeWishlistDishId === dish.id}
+                  onToggleWishlistPicker={toggleWishlistPicker}
+                  onSelectWishlist={chooseWishlistSection}
                 />
               ))
             )}
@@ -1044,10 +1333,11 @@ export default function App() {
 
           </div>
 
-        </section>
+        </section>}
 
 
 
+        {page === "story" && <>
         <section className="feature-section section-pad">
 
           <div className="feature-photo">
@@ -1112,7 +1402,7 @@ export default function App() {
 
             </p>
 
-            <a className="button button--outline" href="#story">
+            <a className="button button--outline" href="/story">
 
               A little about us <ArrowUpRight />
 
@@ -1204,7 +1494,7 @@ export default function App() {
 
               </p>
 
-              <a className="text-link" href="#contact">
+              <a className="text-link" href="/contact">
 
                 Say hello <span>↗</span>
 
@@ -1293,9 +1583,11 @@ export default function App() {
           <div className="quote-banner__spark">✳</div>
 
         </section>
+        </>}
 
 
 
+        {page === "reviews" && <>
         <section className="reviews-section section-pad" id="reviews">
 
           <div className="section-heading reviews-heading">
@@ -1563,10 +1855,11 @@ export default function App() {
           </form>
 
         </section>
+        </>}
 
 
 
-        <section className="contact-section section-pad" id="contact">
+        {page === "contact" && <section className="contact-section section-pad" id="contact">
 
           <div className="contact-copy">
 
@@ -1654,7 +1947,7 @@ export default function App() {
 
           </div>
 
-        </section>
+        </section>}
 
       </main>
 
@@ -1664,7 +1957,7 @@ export default function App() {
 
         <div className="footer-top">
 
-          <a className="brand brand--footer" href="#home">
+          <a className="brand brand--footer" href="/">
 
             <span className="brand__mark">
 
@@ -1690,15 +1983,14 @@ export default function App() {
 
           </p>
 
-          <a className="back-top" href="#home">
-
+          <nav className="footer-navigation" aria-label="Footer navigation">
+            {storefrontNavigation.map(([id, label, href]) => (
+              <a key={id} href={href}>{label}</a>
+            ))}
+          </nav>
+          <a className="back-top" href={pageTopLinks[page]}>
             Back to the top ↑
-
           </a>
-          <a className="footer-admin-link" href="/admin">
-            Menu admin ↗
-          </a>
-
         </div>
 
 
@@ -1787,7 +2079,7 @@ export default function App() {
 
 
 
-            {cartItems.length === 0 ? (
+            {cartItems.length === 0 && bundleCartItems.length === 0 ? (
 
               <div className="cart-empty">
 
@@ -1818,7 +2110,37 @@ export default function App() {
               <>
 
                 <div className="cart-items">
-
+                  {bundleCartItems.map((bundle) => (
+                    <div className="cart-item cart-item--bundle" key={`bundle-${bundle.id}`}>
+                      <img src={bundle.image || undefined} alt={bundle.title} />
+                      <div className="cart-item__details">
+                        <strong>{bundle.title}</strong>
+                        <div className="cart-item__prices">
+                          <span>Bundle · ₹{Number(bundle.price).toFixed(2)}</span>
+                          <del>₹{Number(bundle.originalPrice).toFixed(2)}</del>
+                        </div>
+                        <span className="cart-item__offer">
+                          {bundle.items.map((item) => `${item.name} × ${item.quantity}`).join(" · ")}
+                        </span>
+                        <div className="cart-quantity">
+                          <button
+                            type="button"
+                            onClick={() => changeBundleQuantity(bundle, -1)}
+                            aria-label={`Remove one ${bundle.title}`}
+                          >−</button>
+                          <span>{bundleCart[bundle.id]}</span>
+                          <button
+                            type="button"
+                            onClick={() => changeBundleQuantity(bundle, 1)}
+                            aria-label={`Add one ${bundle.title}`}
+                          >+</button>
+                        </div>
+                      </div>
+                      <strong className="cart-item__line-total">
+                        ₹{(Math.round(Number(bundle.price) * 100) * bundleCart[bundle.id]) / 100}
+                      </strong>
+                    </div>
+                  ))}
                   {cartItems.map((dish) => (
 
                     <div className="cart-item" key={dish.id}>
@@ -1832,12 +2154,17 @@ export default function App() {
                         <strong>{dish.name}</strong>
 
                         <div className="cart-item__prices">
-
-                          <span>₹{dish.price} each</span>
-
+                          <span>₹{(offerUnitPriceCents(dish) / 100).toFixed(2)} each</span>
                           <del>₹{dish.oldPrice}</del>
-
                         </div>
+                        {dish.offer && (
+                          <span className="cart-item__offer">
+                            {offerBadge(dish.offer)}
+                            {dish.offer.type === "bogo" && cart[dish.id] > 1
+                              ? ` · ${Math.floor(cart[dish.id] / 2)} free`
+                              : ""}
+                          </span>
+                        )}
 
 
 
@@ -1880,7 +2207,8 @@ export default function App() {
 
 
                       <strong className="cart-item__line-total">
-                        ₹{Math.round(Number(dish.price) * 100) * cart[dish.id] / 100}
+                        ₹{(Math.round(Number(dish.price) * 100) * cart[dish.id]
+                          - offerSavingsCents(dish, cart[dish.id])) / 100}
 
                       </strong>
 
@@ -1906,7 +2234,7 @@ export default function App() {
 
                   <div className="cart-savings">
 
-                    <span>Product discounts</span>
+                    <span>Product &amp; offer savings</span>
 
                     <strong>−₹{itemDiscount}</strong>
 
@@ -1983,6 +2311,9 @@ export default function App() {
                           setCustomerAddress([
                             address.line1, address.line2, address.city, address.state, address.postalCode,
                           ].filter(Boolean).join(", "));
+                          setDeliveryCity(address.city);
+                          setDeliveryState(address.state);
+                          setDeliveryPostalCode(address.postalCode);
                         }}>
                         <option value="">Enter delivery details or use a saved address</option>
                         {savedAddresses.map((address) => (
@@ -2001,6 +2332,18 @@ export default function App() {
                     <textarea className="checkout-input" placeholder="Full delivery address"
                       value={customerAddress} onChange={(event) => setCustomerAddress(event.target.value)}
                       autoComplete="street-address" rows={3} maxLength={1000} required />
+                    <div className="checkout-location-fields">
+                      <input className="checkout-input" type="text" placeholder="City"
+                        value={deliveryCity} onChange={(event) => setDeliveryCity(event.target.value)}
+                        autoComplete="address-level2" maxLength={100} required />
+                      <input className="checkout-input" type="text" placeholder="State"
+                        value={deliveryState} onChange={(event) => setDeliveryState(event.target.value)}
+                        autoComplete="address-level1" maxLength={100} required />
+                      <input className="checkout-input checkout-location-fields__postal" type="text" placeholder="Postal code"
+                        value={deliveryPostalCode} onChange={(event) => setDeliveryPostalCode(event.target.value)}
+                        autoComplete="postal-code" maxLength={20} required />
+                    </div>
+                    <p className="checkout-location-hint">Your delivery address and area are saved with this order so the restaurant can route it correctly.</p>
 <button
   className="button button--dark cart-continue"
   type="submit"
